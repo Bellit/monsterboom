@@ -11,6 +11,16 @@ npm run dev
 
 Abre http://localhost:5173. `npm test` pasa los tests de la lógica y `npm run build` genera la versión publicable en `dist/`.
 
+## Publicar
+
+Está en **https://boom-monsters.pages.dev** (Cloudflare Pages, de momento con `noindex`). Para publicar una versión nueva:
+
+```
+npm run deploy
+```
+
+Compila, pasa por `dist/` y lo sube con `wrangler` (hace falta tener sesión iniciada: `npx wrangler login`). Las cabeceras de seguridad y caché están en `public/_headers`. Los iconos y la imagen para compartir se regeneran con `npm run icons`.
+
 ## Estructura
 
 - `src/core/` — lógica del juego (mapa, movimiento, bombas, IA). TypeScript puro, sin Phaser: se reutilizará en el servidor online.

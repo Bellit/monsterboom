@@ -183,7 +183,7 @@ h2 { margin: 0; font-size: clamp(1.6rem, 5vw, 2.6rem); }
   /* Móvil en horizontal: menú más compacto */
   .screen { justify-content: flex-start; overflow-y: auto; gap: 0.4rem; }
   h1 { font-size: 2rem; }
-  h1 span { display: inline; }
+  h1 span { display: inline; margin-left: 0.25em; }
   .tagline, .help { display: none; }
 }
 .map-desc { font-size: 0.8rem; color: var(--muted); min-height: 1.2em; }
@@ -299,4 +299,5 @@ button:hover { filter: brightness(1.1); }
 
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; }
+  .skin:has(input:checked) canvas { animation: none; }
 }
