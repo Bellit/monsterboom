@@ -17,7 +17,9 @@ Abre http://localhost:5173. `npm test` pasa los tests de la lógica y `npm run b
 - `src/scenes/` — dibujado con Phaser (de momento formas simples).
 - `src/core/maps.ts` — mapas temáticos (también se pueden escribir como texto).
 - `src/input/` — teclado y controles táctiles.
-- `src/audio/` — efectos de sonido sintetizados.
+- `src/audio/` — motor de audio, efectos y música sintetizados (temas propios en `music.ts`).
+- `src/render/monster.ts` — dibujo de los monstruos, compartido por el juego y el menú.
+- `src/theme.ts` — plantilla de monstruos (nombre, color, rasgo).
 - `src/main.ts` — menús, pausa y flujo de rondas.
 
 ## Controles

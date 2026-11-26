@@ -5,7 +5,9 @@ import { MAPS, type MapId } from '../core/maps';
 import { FLOOR, POWER, TILE, conveyorDir, type CurseType, type Difficulty, type GameEvent, type PlayerInput } from '../core/types';
 import type { Controls } from '../input/controls';
 import { sfx } from '../audio/sfx';
-import { PLAYER_COLORS } from '../theme';
+import { music } from '../audio/music';
+import { MONSTERS, skinsFor, type Monster } from '../theme';
+import { paintMonster, type Painter } from '../render/monster';
 
 export interface MatchSettings {
   players: number;
@@ -13,6 +15,8 @@ export interface MatchSettings {
   roundsToWin: number;
   roundTime: number;
   map: MapId;
+  /** Monstruo elegido por el jugador (índice en MONSTERS). */
+  skin: number;
 }
 
 export interface MatchHooks {
@@ -94,6 +98,8 @@ export class BattleScene extends Phaser.Scene {
   private roundText!: Phaser.GameObjects.Text;
   private statsText!: Phaser.GameObjects.Text;
   private particles: Particle[] = [];
+  private skins: Monster[] = [];
+  private painter!: Painter;
   private shake = 0;
   private roundHandled = false;
   paused = false;
@@ -121,6 +127,7 @@ export class BattleScene extends Phaser.Scene {
       roundTime: settings.roundTime,
       map: settings.map,
     });
+    this.skins = skinsFor(settings.skin, this.match.players.length).map((i) => MONSTERS[i]);
     this.bots = this.match.players.slice(1).map((p) => new BotBrain(p.id, settings.difficulty));
     this.data_.hooks.controls.reset();
 
@@ -133,6 +140,7 @@ export class BattleScene extends Phaser.Scene {
     this.gDyn = this.add.graphics();
     this.gFx = this.add.graphics();
     this.gHud = this.add.graphics();
+    this.painter = phaserPainter(this.gDyn);
     this.drawStatic();
 
     const font = { fontFamily: 'system-ui, sans-serif', fontStyle: 'bold' };
@@ -148,6 +156,8 @@ export class BattleScene extends Phaser.Scene {
     if (settings.map === 'random') this.floatText(W / 2, HUD + 40, `Mapa: ${MAPS.find((m) => m.id === mapName)?.name ?? mapName}`, '#ffffff', 20, 2200);
     this.bigText('3');
     sfx.countdown(false);
+    music.play('battle');
+    music.setTempo(1);
   }
 
   update(_t: number, deltaMs: number): void {
@@ -222,7 +232,7 @@ export class BattleScene extends Phaser.Scene {
       }
       case 'death': {
         const p = this.match.players[e.player];
-        this.burst(px(p.x), py(p.y), [PLAYER_COLORS[e.player], 0xffffff], 22, 260, 0.8);
+        this.burst(px(p.x), py(p.y), [this.skins[e.player].color, 0xffffff], 22, 260, 0.8);
         sfx.death();
         break;
       }
@@ -250,6 +260,7 @@ export class BattleScene extends Phaser.Scene {
       case 'rainStart':
         this.bigText('¡LLUVIA DE BOMBAS!', '#ff6a6a', 40);
         sfx.alarm();
+        music.setTempo(1.3);
         break;
     }
   }
@@ -494,7 +505,6 @@ export class BattleScene extends Phaser.Scene {
 
   private drawMonster(g: Phaser.GameObjects.Graphics, id: number): void {
     const p = this.match.players[id];
-    const color = PLAYER_COLORS[id];
     let scale = 1;
     let alpha = 1;
     if (!p.alive) {
@@ -514,36 +524,11 @@ export class BattleScene extends Phaser.Scene {
       const pulse = 0.5 + 0.5 * Math.sin(this.time_ * 10);
       g.fillStyle(C.curse, 0.18 + pulse * 0.2).fillCircle(cx, cy, r * 1.45);
     }
-    // cuernos
-    const dark = Phaser.Display.Color.ValueToColor(color).darken(30).color;
-    g.fillStyle(dark, alpha);
-    g.fillTriangle(cx - r * 0.8, cy - r * 0.35, cx - r * 0.35, cy - r * 0.75, cx - r * 0.95, cy - r * 1.15);
-    g.fillTriangle(cx + r * 0.8, cy - r * 0.35, cx + r * 0.35, cy - r * 0.75, cx + r * 0.95, cy - r * 1.15);
-    // cuerpo
-    g.fillStyle(color, alpha).fillCircle(cx, cy, r);
-    g.fillStyle(dark, alpha).fillEllipse(cx, cy + r * 0.55, r * 1.5, r * 0.7);
-    g.fillStyle(color, alpha).fillEllipse(cx, cy + r * 0.35, r * 1.6, r * 0.8);
-    // pies
     const step = p.moving ? Math.sin(this.time_ * 14) * 3 : 0;
-    g.fillStyle(dark, alpha);
-    g.fillEllipse(cx - r * 0.45, cy + r * 0.95 + step, r * 0.55, r * 0.35);
-    g.fillEllipse(cx + r * 0.45, cy + r * 0.95 - step, r * 0.55, r * 0.35);
-    // ojos
-    const lx = p.facing === 3 ? -3 : p.facing === 4 ? 3 : 0;
-    const ly = p.facing === 1 ? -3 : p.facing === 2 ? 2 : 0;
-    if (p.alive) {
-      g.fillStyle(0xffffff, alpha).fillCircle(cx - r * 0.35, cy - r * 0.15, r * 0.3).fillCircle(cx + r * 0.35, cy - r * 0.15, r * 0.3);
-      g.fillStyle(p.curse ? C.curse : 0x111122, alpha)
-        .fillCircle(cx - r * 0.35 + lx, cy - r * 0.15 + ly, r * 0.14)
-        .fillCircle(cx + r * 0.35 + lx, cy - r * 0.15 + ly, r * 0.14);
-    } else {
-      g.lineStyle(3, 0x111122, alpha);
-      for (const ex of [-0.35, 0.35]) {
-        const ox = cx + r * ex;
-        const oy = cy - r * 0.15;
-        g.lineBetween(ox - 4, oy - 4, ox + 4, oy + 4).lineBetween(ox - 4, oy + 4, ox + 4, oy - 4);
-      }
-    }
+    const look = [[0, 0], [0, -1], [0, 1], [-1, 0], [1, 0]][p.facing];
+    paintMonster(this.painter, this.skins[id], cx, cy, r, {
+      lookX: look[0], lookY: look[1], alpha, alive: p.alive, step, pupil: p.curse ? C.curse : 0x111122,
+    });
     if (p.alive && p.shield) {
       g.lineStyle(3, C.shield, 0.55 + 0.25 * Math.sin(this.time_ * 6)).strokeCircle(cx, cy + 2, r * 1.35);
       g.fillStyle(C.shield, 0.12).fillCircle(cx, cy + 2, r * 1.35);
@@ -584,7 +569,7 @@ export class BattleScene extends Phaser.Scene {
     game.players.forEach((p, i) => {
       const x = 14 + i * slot;
       const y = HUD / 2;
-      g.fillStyle(PLAYER_COLORS[i], p.alive ? 1 : 0.3).fillCircle(x + 9, y, 9);
+      g.fillStyle(this.skins[i].color, p.alive ? 1 : 0.3).fillCircle(x + 9, y, 9);
       if (!p.alive) g.lineStyle(2, 0xffffff, 0.7).lineBetween(x + 3, y - 6, x + 15, y + 6);
       if (i === 0) g.lineStyle(2, 0xffffff).strokeCircle(x + 9, y, 11);
       const txt = this.winTexts[i];
@@ -596,4 +581,15 @@ export class BattleScene extends Phaser.Scene {
     const extras = [me.kick ? '🦶' : '', me.throw ? '✋' : '', me.shield ? '🛡️' : '', me.curse ? '☠️' : ''].join('');
     this.statsText.setText(`💣${me.maxBombs}  🔥${me.range}  ⚡${me.speedLv}  ${extras}`);
   }
+}
+
+/** Adaptador del dibujo de monstruos para Phaser. */
+function phaserPainter(g: Phaser.GameObjects.Graphics): Painter {
+  return {
+    fill: (c, a = 1) => { g.fillStyle(c, a); },
+    circle: (x, y, r) => { g.fillCircle(x, y, r); },
+    ellipse: (x, y, w, h) => { g.fillEllipse(x, y, w, h); },
+    tri: (x1, y1, x2, y2, x3, y3) => { g.fillTriangle(x1, y1, x2, y2, x3, y3); },
+    line: (x1, y1, x2, y2, w, c, a = 1) => { g.lineStyle(w, c, a).lineBetween(x1, y1, x2, y2); },
+  };
 }

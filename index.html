@@ -16,6 +16,10 @@
       <h1>Boom<span>Monsters</span></h1>
       <p class="tagline">Batalla de monstruos con bombas · prototipo</p>
       <form id="menu-form">
+        <fieldset class="wide picker">
+          <legend>Tu monstruo: <strong id="skin-name"></strong> <span id="skin-bio"></span></legend>
+          <div id="skin-options" class="skin-options"></div>
+        </fieldset>
         <label>Jugadores
           <select name="players">
             <option>2</option><option>3</option><option selected>4</option>
@@ -54,7 +58,10 @@
       <p class="help">Con el guante, pulsa bomba dos veces para lanzarla. La calavera trae una maldición… y se contagia.</p>
     </main>
 
-    <button id="mute" type="button" aria-pressed="false" aria-label="Silenciar el sonido">🔊</button>
+    <div id="audio-toggles">
+      <button id="mute" type="button" aria-pressed="false" aria-label="Silenciar los efectos">🔊</button>
+      <button id="music-toggle" type="button" aria-pressed="false" aria-label="Apagar la música">🎵</button>
+    </div>
 
     <section id="pause" class="screen dim" hidden aria-label="Pausa">
       <h2>Pausa</h2>

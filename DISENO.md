@@ -16,6 +16,7 @@ Juego web de acción en cuadrícula con bombas, protagonizado por monstruos. Per
 
 ## Personajes
 - Todos los monstruos jugables tienen **las mismas capacidades**; solo cambia el aspecto. Las diferencias las dan los power-ups.
+- 8 monstruos: Moco (cuernos), Bloop (cíclope), Zarpa (orejas), Mochi (mofletes), Chicle (antenas), Chispa (pelos de punta), Grumo (colmillos) y Pinchi (cresta). El jugador elige el suyo en el menú y los bots toman el resto.
 
 ## Movimiento
 - **Libre con corrección en las esquinas**: si chocas con una esquina por poco, el personaje se desliza solo hacia el pasillo.
@@ -69,7 +70,9 @@ Juego web de acción en cuadrícula con bombas, protagonizado por monstruos. Per
    - ✅ Cuenta atrás, lluvia de bombas, partículas, textos flotantes
    - ✅ Efectos de sonido sintetizados y botón de silencio
    - ✅ Tests automáticos de la lógica (`npm test`)
-   - Pendiente: música, elegir el monstruo/color, IA que use portales y escudo con cabeza
+   - ✅ Elegir monstruo en el menú (se recuerda entre visitas)
+   - ✅ Música chiptune propia generada por código: tema de menú y de batalla (se acelera con la lluvia); botones separados de música y efectos
+   - Pendiente: IA que use portales y escudo con cabeza
 3. Modo historia.
 4. Arte, sonido y pulido.
 5. Online con Colyseus.

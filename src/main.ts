@@ -2,10 +2,13 @@ import Phaser from 'phaser';
 import './style.css';
 import { BattleScene, type MatchSettings } from './scenes/BattleScene';
 import { Controls } from './input/controls';
-import { PLAYER_COLORS, PLAYER_NAMES, cssColor } from './theme';
+import { MONSTERS, cssColor, skinsFor } from './theme';
+import { canvasPainter, paintMonster } from './render/monster';
 import type { Difficulty } from './core/types';
 import { MAPS, type MapId } from './core/maps';
 import { sfx } from './audio/sfx';
+import { music } from './audio/music';
+import { audio, type Bus } from './audio/engine';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -19,19 +22,63 @@ const showMapDesc = () => {
 mapSelect.addEventListener('change', showMapDesc);
 showMapDesc();
 
-// Botón de sonido.
-const muteBtn = $('mute');
-const paintMute = () => {
-  muteBtn.textContent = sfx.muted ? '🔇' : '🔊';
-  muteBtn.setAttribute('aria-pressed', String(sfx.muted));
-  muteBtn.setAttribute('aria-label', sfx.muted ? 'Activar el sonido' : 'Silenciar el sonido');
-};
-muteBtn.addEventListener('click', () => {
-  sfx.setMuted(!sfx.muted);
-  paintMute();
-  muteBtn.blur();
+// Selector de monstruo: miniaturas dibujadas con el mismo código que el juego.
+const SKIN_KEY = 'boom-monsters:skin';
+let skin = Math.min(MONSTERS.length - 1, Math.max(0, Number(localStorage.getItem(SKIN_KEY) ?? 0) || 0));
+const skinOptions = $('skin-options');
+const skinName = $('skin-name');
+const skinBio = $('skin-bio');
+MONSTERS.forEach((m, i) => {
+  const label = document.createElement('label');
+  label.className = 'skin';
+  const input = document.createElement('input');
+  input.type = 'radio';
+  input.name = 'skin';
+  input.value = String(i);
+  input.checked = i === skin;
+  input.setAttribute('aria-label', m.name);
+  const canvas = document.createElement('canvas');
+  canvas.width = 96;
+  canvas.height = 96;
+  canvas.setAttribute('aria-hidden', 'true');
+  const ctx = canvas.getContext('2d');
+  if (ctx) paintMonster(canvasPainter(ctx), m, 48, 54, 26, { lookX: 0, lookY: 0.4, alpha: 1, alive: true, step: 0, pupil: 0x111122 });
+  input.addEventListener('change', () => {
+    skin = i;
+    localStorage.setItem(SKIN_KEY, String(i));
+    showSkin();
+    sfx.select();
+  });
+  label.append(input, canvas);
+  skinOptions.append(label);
 });
-paintMute();
+function showSkin(): void {
+  const m = MONSTERS[skin];
+  skinName.textContent = m.name;
+  skinName.style.color = cssColor(m.color);
+  skinBio.textContent = '· ' + m.bio;
+}
+showSkin();
+
+// Botones de efectos y música.
+function audioToggle(id: string, bus: Bus, on: string, off: string, labels: [string, string]): void {
+  const btn = $(id);
+  const paint = () => {
+    const isOff = audio.isOff(bus);
+    btn.textContent = isOff ? off : on;
+    btn.setAttribute('aria-pressed', String(isOff));
+    btn.setAttribute('aria-label', isOff ? labels[1] : labels[0]);
+  };
+  btn.addEventListener('click', () => {
+    audio.setOff(bus, !audio.isOff(bus));
+    paint();
+    btn.blur();
+  });
+  paint();
+}
+audioToggle('mute', 'sfx', '🔊', '🔇', ['Silenciar los efectos', 'Activar los efectos']);
+audioToggle('music-toggle', 'music', '🎵', '🎵', ['Apagar la música', 'Encender la música']);
+music.play('menu');
 
 const menu = $('menu');
 const pauseScreen = $('pause');
@@ -89,15 +136,17 @@ function startMatch(settings: MatchSettings): void {
 
 function onRoundOver(winner: number, wins: number[], settings: MatchSettings, next: () => void): void {
   const champion = wins.findIndex((w) => w >= settings.roundsToWin);
-  const name = (id: number) => (id === 0 ? 'Tú' : PLAYER_NAMES[id]);
+  const skins = skinsFor(settings.skin, wins.length);
+  const name = (id: number) => (id === 0 ? 'Tú' : MONSTERS[skins[id]].name);
   resultActions.replaceChildren();
-  resultTitle.style.color = winner >= 0 ? cssColor(PLAYER_COLORS[winner]) : '';
+  resultTitle.style.color = winner >= 0 ? cssColor(MONSTERS[skins[winner]].color) : '';
 
   if (champion >= 0) {
     controls.enabled = false;
     show(touch, false);
     resultTitle.textContent = champion === 0 ? '¡Has ganado la partida!' : `${name(champion)} gana la partida`;
-    resultText.textContent = scoreLine(wins);
+    resultText.textContent = scoreLine(wins, name);
+    music.play('menu');
     resultActions.append(
       button('Revancha', () => current && startMatch(current), true),
       button('Menú', toMenu),
@@ -106,7 +155,7 @@ function onRoundOver(winner: number, wins: number[], settings: MatchSettings, ne
     resultActions.querySelector('button')?.focus();
   } else {
     resultTitle.textContent = winner < 0 ? 'Empate' : winner === 0 ? '¡Ronda para ti!' : `Ronda para ${name(winner)}`;
-    resultText.textContent = scoreLine(wins);
+    resultText.textContent = scoreLine(wins, name);
     show(resultScreen, true);
     setTimeout(() => {
       show(resultScreen, false);
@@ -115,8 +164,8 @@ function onRoundOver(winner: number, wins: number[], settings: MatchSettings, ne
   }
 }
 
-function scoreLine(wins: number[]): string {
-  return wins.map((w, i) => `${i === 0 ? 'Tú' : PLAYER_NAMES[i]} ${w}`).join(' · ');
+function scoreLine(wins: number[], name: (id: number) => string): string {
+  return wins.map((w, i) => `${name(i)} ${w}`).join(' · ');
 }
 
 function button(label: string, onClick: () => void, primary = false): HTMLButtonElement {
@@ -137,6 +186,7 @@ function toMenu(): void {
   show(touch, false);
   document.body.classList.remove('in-game', 'paused');
   show(menu, true);
+  music.play('menu');
   $('start').focus();
 }
 
@@ -161,6 +211,7 @@ $('menu-form').addEventListener('submit', (e) => {
     roundsToWin: Number(form.get('rounds')),
     roundTime: Number(form.get('time')),
     map: form.get('map') as MapId,
+    skin,
   });
 });
 $('resume').addEventListener('click', () => setPaused(false));
