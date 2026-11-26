@@ -104,6 +104,32 @@ h2 { margin: 0; font-size: clamp(1.6rem, 5vw, 2.6rem); }
 .mode input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
 .mode:has(input:checked) { background: #3a2f63; color: var(--text) !important; }
 .mode:has(input:focus-visible) { outline: 3px solid #fff; outline-offset: 2px; }
+.level-picker {
+  border: 2px solid #4a4068;
+  border-radius: 12px;
+  padding: 0 0.8rem;
+}
+.level-picker summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-weight: 700;
+  cursor: pointer;
+  color: var(--text);
+}
+.level-picker[open] { padding-bottom: 0.8rem; }
+.level-help { margin: 0 0 0.6rem; font-size: 0.8rem; color: var(--muted); }
+.level-grid { display: grid; gap: 0.45rem; }
+.level-row {
+  display: grid;
+  grid-template-columns: minmax(0, 7.5rem) repeat(5, minmax(0, 1fr));
+  gap: 0.35rem;
+  align-items: center;
+}
+.level-row > span { font-size: 0.85rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#menu-form .level-row button { grid-column: auto; min-height: 44px; padding: 0; font-size: 0.95rem; }
+.level-row button:disabled { opacity: 0.35; cursor: not-allowed; filter: none; }
+.level-row button.current { border-color: var(--accent); }
 .story-progress { margin: 0; color: var(--muted); text-align: center; }
 .story-progress strong { color: var(--text); }
 .picker {

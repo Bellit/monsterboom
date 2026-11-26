@@ -131,6 +131,24 @@ export function nextLevel(pos: StoryPos): StoryPos | null {
   return null;
 }
 
+/** Posición del nivel en el recorrido completo (0 = primer nivel del primer mundo). */
+export function levelIndex(pos: StoryPos): number {
+  let i = 0;
+  for (let w = 0; w < pos.world; w++) i += WORLDS[w].levels.length;
+  return i + pos.level;
+}
+
+/** Nivel en la posición i del recorrido, o null si no existe. */
+export function posFromIndex(i: number): StoryPos | null {
+  if (i < 0) return null;
+  for (let w = 0; w < WORLDS.length; w++) {
+    const n = WORLDS[w].levels.length;
+    if (i < n) return { world: w, level: i };
+    i -= n;
+  }
+  return null;
+}
+
 export function levelLabel(pos: StoryPos): string {
   const lv = levelAt(pos);
   return lv?.boss ? `${pos.world + 1}-${pos.level + 1} · ${lv.boss.name}` : `${pos.world + 1}-${pos.level + 1}`;

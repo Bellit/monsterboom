@@ -3,7 +3,7 @@ import './style.css';
 import { BattleScene, type MatchSettings, type StoryRun } from './scenes/BattleScene';
 import { BASE_STATS, type PlayerStats } from './core/game';
 import { levelAt, levelLabel, nextLevel, WORLDS } from './core/story';
-import { START_LIVES, clearRun, loadRun, newRun, saveRun, worldName } from './storySave';
+import { START_LIVES, clearRun, isUnlocked, loadRun, newRun, saveRun, unlockedIndex, worldName } from './storySave';
 import { Controls } from './input/controls';
 import { MONSTERS, cssColor, skinsFor } from './theme';
 import { canvasPainter, paintMonster } from './render/monster';
@@ -244,6 +244,49 @@ function refreshMenu(): void {
     storyNew.className = 'primary wide';
     storyNew.textContent = 'Empezar';
   }
+  renderLevelPicker();
+}
+
+// Selector de niveles: solo los que ya se han alcanzado en el modo historia.
+const levelPicker = $<HTMLDetailsElement>('level-picker');
+const levelGrid = $('level-grid');
+
+function renderLevelPicker(): void {
+  show(levelPicker, unlockedIndex() > 0);
+  const saved = loadRun();
+  levelGrid.replaceChildren();
+  WORLDS.forEach((world, w) => {
+    const row = document.createElement('div');
+    row.className = 'level-row';
+    const name = document.createElement('span');
+    name.textContent = `${w + 1}. ${world.name}`;
+    row.append(name);
+    world.levels.forEach((lv, l) => {
+      const pos = { world: w, level: l };
+      const b = document.createElement('button');
+      b.type = 'button';
+      const open = isUnlocked(pos);
+      b.disabled = !open;
+      b.textContent = open ? (lv.boss ? '👑' : String(l + 1)) : '🔒';
+      b.setAttribute('aria-label', `${world.name} ${levelLabel(pos)}${open ? '' : ' (bloqueado)'}`);
+      if (saved && saved.pos.world === w && saved.pos.level === l) b.classList.add('current');
+      b.addEventListener('click', () => playFromPicker(pos));
+      row.append(b);
+    });
+    levelGrid.append(row);
+  });
+}
+
+function playFromPicker(pos: { world: number; level: number }): void {
+  if (!isUnlocked(pos)) return;
+  const saved = loadRun();
+  const same = saved && saved.pos.world === pos.world && saved.pos.level === pos.level;
+  if (same) {
+    continueStory();
+    return;
+  }
+  if (saved && !confirm(`¿Jugar ${worldName(pos.world)} ${levelLabel(pos)}? Sustituye a la partida guardada (${worldName(saved.pos.world)} ${levelLabel(saved.pos)}).`)) return;
+  playLevel(newRun(skin, pos.world, pos.level));
 }
 
 for (const input of document.querySelectorAll<HTMLInputElement>('input[name=mode]')) {

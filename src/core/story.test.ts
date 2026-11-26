@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Game, STEP, FUSE } from './game';
 import { makeEnemy } from './enemies';
-import { WORLDS, nextLevel, type StoryLevel } from './story';
+import { WORLDS, levelIndex, nextLevel, posFromIndex, type StoryLevel } from './story';
 import { TILE, type Dir } from './types';
 
 const EMPTY_LEVEL: StoryLevel = { enemies: {}, powerups: [], soft: 0, time: 200 };
@@ -100,6 +100,19 @@ describe('modo historia', () => {
       startStats: { maxBombs: 3, range: 4, speedLv: 2, kick: true, throw: false, shield: false },
     });
     expect(g.statsOf()).toMatchObject({ maxBombs: 3, range: 4, speedLv: 2, kick: true });
+  });
+
+  it('numera los niveles en orden para el selector', () => {
+    expect(levelIndex({ world: 0, level: 0 })).toBe(0);
+    expect(levelIndex({ world: 1, level: 2 })).toBe(WORLDS[0].levels.length + 2);
+    let pos: { world: number; level: number } | null = { world: 0, level: 0 };
+    for (let i = 0; pos; i++) {
+      expect(levelIndex(pos)).toBe(i);
+      expect(posFromIndex(i)).toEqual(pos);
+      pos = nextLevel(pos);
+    }
+    expect(posFromIndex(999)).toBeNull();
+    expect(posFromIndex(-1)).toBeNull();
   });
 
   it('recorre los mundos en orden y termina', () => {
