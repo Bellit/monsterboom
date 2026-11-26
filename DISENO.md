@@ -67,6 +67,8 @@ Juego web de acción en cuadrícula con bombas, protagonizado por monstruos. Per
 2. **Batalla completa** ← *en curso*
    - ✅ Power-ups: patear, lanzar (pulsar bomba dos veces), escudo y 5 maldiciones contagiosas (lento, acelerado, controles al revés, bombas sin control, sin bombas)
    - ✅ Mapas: Cripta clásica, Portales, Fábrica (cintas), Lago helado y «al azar»
+   - ✅ Cada mundo con aspecto propio (`src/render/themes.ts`): Cripta (lápidas), Lago helado (nieve, rocas nevadas, cubos de hielo), Fábrica (chapa, maquinaria, cajas), Portales (obsidiana y cristales)
+   - ✅ Lago helado: el hielo hace patinar (esquirlas y sonido al deslizarse) y los cubos de hielo rotos dejan suelo helado, así que el mapa resbala cada vez más
    - ✅ Cuenta atrás, lluvia de bombas, partículas, textos flotantes
    - ✅ Efectos de sonido sintetizados y botón de silencio
    - ✅ Tests automáticos de la lógica (`npm test`)

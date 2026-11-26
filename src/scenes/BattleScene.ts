@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { Game, STEP, type PlayerStats } from '../core/game';
 import { WORLDS, levelAt, levelLabel, type StoryPos } from '../core/story';
 import { paintEnemy } from '../render/enemies';
+import { THEMES, drawIce, type ThemeArt } from '../render/themes';
 import { BotBrain } from '../core/ai';
 import { MAPS, type MapId } from '../core/maps';
 import { FLOOR, POWER, TILE, conveyorDir, type CurseType, type Difficulty, type GameEvent, type PlayerInput } from '../core/types';
@@ -113,6 +114,11 @@ export class BattleScene extends Phaser.Scene {
   private statsText!: Phaser.GameObjects.Text;
   private particles: Particle[] = [];
   private skins: Monster[] = [];
+  private theme!: ThemeArt;
+  /** Bloques que ya estaban rompiéndose (para lanzar trozos solo una vez). */
+  private seenBurning = new Set<number>();
+  /** Si el jugador 0 iba patinando en el paso anterior (para el sonido). */
+  private wasSliding = false;
   private painter!: Painter;
   private shake = 0;
   private roundHandled = false;
@@ -131,6 +137,8 @@ export class BattleScene extends Phaser.Scene {
     this.paused = false;
     this.winTexts = [];
     this.particles = [];
+    this.seenBurning = new Set();
+    this.wasSliding = false;
   }
 
   create(): void {
@@ -152,7 +160,8 @@ export class BattleScene extends Phaser.Scene {
     const W = this.match.w * T;
     const H = this.match.h * T + HUD;
     this.scale.setGameSize(W, H);
-    this.cameras.main.setBackgroundColor(C.bg);
+    this.theme = THEMES[this.match.mapId === 'custom' ? 'classic' : this.match.mapId];
+    this.cameras.main.setBackgroundColor(this.theme.bg);
 
     this.gStatic = this.add.graphics();
     this.gDyn = this.add.graphics();
@@ -199,6 +208,7 @@ export class BattleScene extends Phaser.Scene {
       this.acc -= STEP;
     }
     for (const e of this.match.events) this.onEvent(e);
+    this.iceEffects();
     this.match.events.length = 0;
     this.shake = Math.max(0, this.shake - dt);
     this.updateParticles(dt);
@@ -277,6 +287,10 @@ export class BattleScene extends Phaser.Scene {
         this.burst(px(e.x), py(e.y), [C.portalGlow, 0xffffff], 14, 160, 0.5);
         sfx.teleport();
         break;
+      case 'freeze':
+        this.drawStatic();
+        this.burst(px(e.x), py(e.y), [0xffffff, 0xbfeaff], 8, 90, 0.5, -40);
+        break;
       case 'kick':
         sfx.kick();
         break;
@@ -320,6 +334,30 @@ export class BattleScene extends Phaser.Scene {
         music.setTempo(1.3);
         break;
     }
+  }
+
+  /** Esquirlas al patinar y sonido al empezar a deslizarse. */
+  private iceEffects(): void {
+    const game = this.match;
+    game.players.forEach((p, i) => {
+      if (!p.alive) return;
+      const onIce = game.floor[game.idx(Math.round(p.x), Math.round(p.y))] === FLOOR.Ice;
+      const sliding = onIce && p.iceDir !== 0;
+      if (sliding && Math.random() < 0.6) {
+        const back = [[0, 0], [0, 1], [0, -1], [1, 0], [-1, 0]][p.iceDir];
+        this.particles.push({
+          x: p.x * T + T / 2 + back[0] * 12 + (Math.random() - 0.5) * 14,
+          y: p.y * T + T * 0.85 + HUD + back[1] * 8,
+          vx: back[0] * 60 + (Math.random() - 0.5) * 50,
+          vy: -40 - Math.random() * 60,
+          life: 0.35, max: 0.35, color: Math.random() < 0.5 ? 0xffffff : 0xcfefff, size: 2 + Math.random() * 2, gravity: 260,
+        });
+      }
+      if (i === 0) {
+        if (sliding && !this.wasSliding) sfx.slide();
+        this.wasSliding = sliding;
+      }
+    });
   }
 
   private burst(x: number, y: number, colors: number[], n: number, speed: number, life: number, gravity = 300): void {
@@ -380,20 +418,17 @@ export class BattleScene extends Phaser.Scene {
         const py = y * T + HUD;
         const k = game.idx(x, y);
         if (game.tiles[k] === TILE.Solid) {
-          g.fillStyle(C.stoneDark).fillRect(px, py, T, T);
-          g.fillStyle(C.stone).fillRect(px + 2, py + 2, T - 4, T - 8);
-          g.fillStyle(C.stoneTop).fillRect(px + 2, py + 2, T - 4, 6);
+          this.theme.wall(g, px, py, T);
           continue;
         }
         const f = game.floor[k];
         if (f === FLOOR.Ice) {
-          g.fillStyle((x + y) % 2 === 0 ? C.ice : C.iceB).fillRect(px, py, T, T);
-          g.fillStyle(0xffffff, 0.5).fillRect(px + 8, py + 10, 12, 3).fillRect(px + 26, py + 30, 9, 3);
+          drawIce(g, px, py, x, y, T);
         } else if (conveyorDir(f)) {
           g.fillStyle(C.belt).fillRect(px, py, T, T);
           g.fillStyle(0x2a2d36).fillRect(px, py, T, 3).fillRect(px, py + T - 3, T, 3);
         } else {
-          g.fillStyle((x + y) % 2 === 0 ? C.floorA : C.floorB).fillRect(px, py, T, T);
+          this.theme.floor(g, px, py, x, y, T);
         }
         if (f === FLOOR.Teleport) {
           g.fillStyle(0x1b0f33).fillEllipse(px + T / 2, py + T / 2, T * 0.85, T * 0.7);
@@ -401,7 +436,7 @@ export class BattleScene extends Phaser.Scene {
         }
         // sombra de la pared de arriba
         if (y > 0 && game.tiles[game.idx(x, y - 1)] === TILE.Solid && f !== FLOOR.Ice) {
-          g.fillStyle(0x000000, 0.18).fillRect(px, py, T, 8);
+          g.fillStyle(0x000000, this.theme.shadow).fillRect(px, py, T, 8);
         }
       }
     }
@@ -433,16 +468,14 @@ export class BattleScene extends Phaser.Scene {
         }
         if (k === game.door && t === TILE.Empty) this.drawDoor(g, px, py, game.doorOpen);
         if (t === TILE.Soft) {
-          g.fillStyle(C.softLine).fillRect(px + 1, py + 1, T - 2, T - 2);
-          g.fillStyle(C.soft).fillRect(px + 3, py + 3, T - 6, T - 8);
-          g.fillStyle(C.softTop).fillRect(px + 3, py + 3, T - 6, 5);
-          g.fillStyle(C.softLine);
-          g.fillRect(px + 3, py + T / 2 - 1, T - 6, 3);
-          g.fillRect(px + T / 2 - 1, py + 3, 3, T / 2 - 3);
+          this.theme.soft(g, px, py, T, k);
         } else if (t === TILE.Burning) {
           const left = game.burning.get(k) ?? 0;
-          g.fillStyle(C.burn, Math.min(1, left * 2.5)).fillRect(px + 4, py + 4, T - 8, T - 8);
-          g.fillStyle(C.flameIn, Math.min(1, left * 2)).fillRect(px + 12, py + 12, T - 24, T - 24);
+          if (!this.seenBurning.has(k)) {
+            this.seenBurning.add(k);
+            this.burst(px + T / 2, py + T / 2, this.theme.shards, 10, 170, 0.6);
+          }
+          this.theme.burning(g, px, py, T, Math.min(1, left / 0.5));
         } else if (game.powerups[k] >= 0) {
           this.drawPowerup(g, game.powerups[k], px, py);
         }
@@ -468,6 +501,8 @@ export class BattleScene extends Phaser.Scene {
       const pulse = 1 + 0.08 * Math.sin((b.fuse < 1 ? 26 : 12) * b.fuse);
       const r = T * 0.33 * pulse;
       g.fillStyle(0x000000, 0.25).fillEllipse(cx, ground + r * 0.9, r * 1.8 * (1 - lift / (T * 3)), r * 0.6);
+      // Contorno claro: que se vea en cualquier suelo, también en los oscuros.
+      g.fillStyle(0xffffff, 0.55).fillCircle(cx, cy, r + 2);
       g.fillStyle(b.owner < 0 ? C.rainBomb : C.bomb).fillCircle(cx, cy, r);
       if (b.fuse < 0.8 && Math.sin(this.time_ * 30) > 0) g.fillStyle(0xff3030, 0.35).fillCircle(cx, cy, r);
       g.fillStyle(0xffffff, 0.35).fillCircle(cx - r * 0.35, cy - r * 0.35, r * 0.25);

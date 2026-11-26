@@ -98,6 +98,12 @@ class Sfx {
     [392, 523, 659, 784].forEach((f, i) => this.tone(f, f, 0.12, 'triangle', 0.2, i * 0.08));
   }
 
+  slide(): void {
+    if (!this.throttle('slide', 250)) return;
+    this.noise(0.35, 7000, 1500, 0.16);
+    this.tone(1800, 900, 0.25, 'sine', 0.05);
+  }
+
   select(): void {
     this.tone(660, 990, 0.08, 'square', 0.1);
   }

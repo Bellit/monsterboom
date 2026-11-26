@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Game, STEP, FUSE } from './game';
 import { BotBrain } from './ai';
-import { POWER, TILE, type Dir, type PlayerInput } from './types';
+import { FLOOR, POWER, TILE, type Dir, type PlayerInput } from './types';
 import { MAPS } from './maps';
 
 /** Crea una partida de prueba sin cuenta atrás ni power-ups aleatorios. */
@@ -214,6 +214,44 @@ describe('suelos especiales', () => {
     run(g, 0.2, 4);
     run(g, 2); // sin tocar nada
     expect(g.players[0].x).toBeCloseTo(7, 1);
+  });
+});
+
+describe('lago helado', () => {
+  it('los cubos de hielo rotos dejan suelo helado', () => {
+    const g = new Game({ players: 2, seed: 4, roundTime: 999, map: 'ice', startDelay: 0, powerChance: 0 });
+    // Buscar un bloque fuera del lago y romperlo con una bomba del jugador 0 al lado.
+    let target = -1;
+    for (let k = 0; k < g.tiles.length && target < 0; k++) {
+      if (g.tiles[k] !== TILE.Soft || g.floor[k] !== FLOOR.Normal) continue;
+      const x = k % g.w;
+      const y = Math.floor(k / g.w);
+      if (g.tiles[g.idx(x - 1, y)] === TILE.Empty) target = k;
+    }
+    expect(target).toBeGreaterThanOrEqual(0);
+    const p = g.players[0];
+    p.x = (target % g.w) - 1;
+    p.y = Math.floor(target / g.w);
+    run(g, STEP, 0, true);
+    run(g, FUSE + 1);
+    expect(g.tiles[target]).toBe(TILE.Empty);
+    expect(g.floor[target]).toBe(FLOOR.Ice);
+  });
+
+  it('en otros mapas los bloques no dejan hielo', () => {
+    const g = new Game({ players: 2, seed: 4, roundTime: 999, map: 'classic', startDelay: 0, powerChance: 0 });
+    let target = -1;
+    for (let k = 0; k < g.tiles.length && target < 0; k++) {
+      const x = k % g.w;
+      if (g.tiles[k] === TILE.Soft && g.tiles[k - 1] === TILE.Empty && x > 1) target = k;
+    }
+    const p = g.players[0];
+    p.x = (target % g.w) - 1;
+    p.y = Math.floor(target / g.w);
+    run(g, STEP, 0, true);
+    run(g, FUSE + 1);
+    expect(g.tiles[target]).toBe(TILE.Empty);
+    expect(g.floor[target]).toBe(FLOOR.Normal);
   });
 });
 

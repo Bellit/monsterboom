@@ -122,6 +122,7 @@ export type GameEvent =
   | { type: 'countdown'; value: number }
   | { type: 'go' }
   | { type: 'rainStart' }
+  | { type: 'freeze'; x: number; y: number }
   // Modo historia
   | { type: 'enemyDeath'; x: number; y: number; points: number; boss: boolean }
   | { type: 'bossHit'; x: number; y: number; hp: number }

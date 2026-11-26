@@ -736,6 +736,11 @@ export class Game {
       }
       this.burning.delete(k);
       this.tiles[k] = TILE.Empty;
+      // Lago helado: el cubo de hielo derretido deja un charco que se congela.
+      if (this.mapId === 'ice' && this.floor[k] === FLOOR.Normal) {
+        this.floor[k] = FLOOR.Ice;
+        this.events.push({ type: 'freeze', x: k % this.w, y: Math.floor(k / this.w) });
+      }
       const hidden = this.hidden.get(k);
       if (hidden !== undefined) {
         this.powerups[k] = hidden;
