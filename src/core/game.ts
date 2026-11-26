@@ -1,6 +1,7 @@
 import { Rng } from './rng';
+import { generateMap, parseLayout, MAPS, type MapId, type MapLayout } from './maps';
 import {
-  DIRS, DX, DY, NO_INPUT, POWER, TILE,
+  CURSES, DIRS, DX, DY, FLOOR, NO_INPUT, OPPOSITE, POWER, TILE, conveyorDir,
   type Bomb, type Dir, type GameEvent, type Player, type PlayerInput, type PowerType,
 } from './types';
 
@@ -8,24 +9,32 @@ import {
 export const STEP = 1 / 60;
 
 export const FUSE = 2.5;
+export const BASE_SPEED = 3.6; // casillas por segundo
+export const SPEED_STEP = 0.55;
 const FLAME_TIME = 0.55;
 const BURN_TIME = 0.5;
-const BASE_SPEED = 3.6; // casillas por segundo
-const SPEED_STEP = 0.55;
 const MAX_SPEED_LV = 6;
 const MAX_BOMBS = 8;
 const MAX_RANGE = 8;
 const KICK_SPEED = 9;
-const POWER_CHANCE = 0.35;
+const CONVEYOR_SPEED = 1.8;
+const THROW_DIST = 3;
+const SHIELD_INVULN = 1.5;
+const CURSE_TIME = 10;
+const POWER_CHANCE = 0.38;
 const RAIN_INTERVAL = 0.4;
 const RAIN_FUSE = 1.6;
 const END_DELAY = 1.4;
+const START_DELAY = 3;
 
 const POWER_WEIGHTS: [PowerType, number][] = [
-  [POWER.Bomb, 3],
-  [POWER.Fire, 3],
-  [POWER.Speed, 2],
-  [POWER.Kick, 1],
+  [POWER.Bomb, 6],
+  [POWER.Fire, 6],
+  [POWER.Speed, 4],
+  [POWER.Kick, 2],
+  [POWER.Throw, 2],
+  [POWER.Shield, 1.5],
+  [POWER.Curse, 2],
 ];
 
 export interface RoundConfig {
@@ -33,14 +42,25 @@ export interface RoundConfig {
   seed: number;
   /** Segundos antes de que empiece la lluvia de bombas. */
   roundTime: number;
+  map?: MapId;
+  /** Mapa escrito a mano (tiene prioridad sobre `map`). */
+  layout?: string[];
+  /** Segundos de cuenta atrás antes de poder moverse (por defecto 3). */
+  startDelay?: number;
+  /** Probabilidad de que un bloque suelte power-up (por defecto 0.38). */
+  powerChance?: number;
 }
 
-export type Phase = 'playing' | 'ending' | 'over';
+export type Phase = 'starting' | 'playing' | 'ending' | 'over';
 
 export class Game {
   readonly w: number;
   readonly h: number;
+  readonly mapId: Exclude<MapId, 'random'> | 'custom';
   readonly tiles: Uint8Array;
+  readonly floor: Uint8Array;
+  /** Casillas con portal. */
+  readonly teleports: number[] = [];
   /** -1 = sin power-up */
   readonly powerups: Int8Array;
   /** Tiempo restante de llama en cada casilla. */
@@ -56,37 +76,56 @@ export class Game {
   readonly rng: Rng;
 
   timeLeft: number;
-  phase: Phase = 'playing';
+  phase: Phase;
+  /** Segundos de cuenta atrás que quedan (fase 'starting'). */
+  startTimer: number;
   /** Id del ganador, o -1 si es empate. Válido cuando phase === 'over'. */
   winner = -1;
   private endTimer = 0;
   private rainTimer = 0;
   private nextBombId = 1;
+  private readonly powerChance: number;
 
   constructor(cfg: RoundConfig) {
     this.rng = new Rng(cfg.seed);
-    const size = cfg.players <= 4 ? { w: 15, h: 13 } : { w: 19, h: 15 };
-    this.w = size.w;
-    this.h = size.h;
+    let layout: MapLayout;
+    if (cfg.layout) {
+      layout = parseLayout(cfg.layout);
+      this.mapId = 'custom';
+    } else {
+      let id = cfg.map ?? 'classic';
+      if (id === 'random') {
+        const options = MAPS.filter((m) => m.id !== 'random');
+        id = options[this.rng.int(options.length)].id;
+      }
+      this.mapId = id as Exclude<MapId, 'random'>;
+      layout = generateMap(this.mapId, cfg.players, () => this.rng.next());
+    }
+    this.w = layout.w;
+    this.h = layout.h;
+    this.tiles = layout.tiles;
+    this.floor = layout.floor;
     const n = this.w * this.h;
-    this.tiles = new Uint8Array(n);
     this.powerups = new Int8Array(n).fill(-1);
     this.flames = new Float32Array(n);
     this.flameMask = new Uint8Array(n);
     this.timeLeft = cfg.roundTime;
+    this.startTimer = cfg.startDelay ?? START_DELAY;
+    this.phase = this.startTimer > 0 ? 'starting' : 'playing';
+    this.powerChance = cfg.powerChance ?? POWER_CHANCE;
+    for (let k = 0; k < n; k++) if (this.floor[k] === FLOOR.Teleport) this.teleports.push(k);
 
-    const spawns = this.spawnPoints().slice(0, cfg.players);
-    this.generate(spawns);
-    spawns.forEach(([x, y], id) => {
+    layout.spawns.slice(0, cfg.players).forEach(([x, y], id) => {
       this.players.push({
         id, x, y, alive: true, deadFor: 0,
-        maxBombs: 1, range: 2, speedLv: 0, kick: false,
-        facing: 2, moving: false,
+        maxBombs: 1, range: 2, speedLv: 0, kick: false, throw: false,
+        shield: false, invuln: 0, curse: null, curseTime: 0,
+        facing: 2, moving: false, iceDir: 0, tpLock: -1,
       });
     });
   }
 
-  // ---------- Mapa ----------
+  // ---------- Consultas ----------
 
   idx(x: number, y: number): number {
     return y * this.w + x;
@@ -95,42 +134,6 @@ export class Game {
   inBounds(x: number, y: number): boolean {
     return x >= 0 && y >= 0 && x < this.w && y < this.h;
   }
-
-  private spawnPoints(): [number, number][] {
-    const { w, h } = this;
-    const cx = Math.floor(w / 2) % 2 === 1 ? Math.floor(w / 2) : Math.floor(w / 2) - 1;
-    const cy = Math.floor(h / 2) % 2 === 1 ? Math.floor(h / 2) : Math.floor(h / 2) - 1;
-    return [
-      [1, 1], [w - 2, h - 2], [w - 2, 1], [1, h - 2],
-      [cx, 1], [cx, h - 2], [1, cy], [w - 2, cy],
-    ];
-  }
-
-  private generate(spawns: [number, number][]): void {
-    const { w, h } = this;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const border = x === 0 || y === 0 || x === w - 1 || y === h - 1;
-        const pillar = x % 2 === 0 && y % 2 === 0;
-        let t: number = TILE.Empty;
-        if (border || pillar) t = TILE.Solid;
-        else if (this.rng.next() < 0.72) t = TILE.Soft;
-        this.tiles[this.idx(x, y)] = t;
-      }
-    }
-    // Despejar la salida de cada jugador.
-    for (const [sx, sy] of spawns) {
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (Math.abs(dx) + Math.abs(dy) > 1) continue;
-          const i = this.idx(sx + dx, sy + dy);
-          if (this.tiles[i] === TILE.Soft) this.tiles[i] = TILE.Empty;
-        }
-      }
-    }
-  }
-
-  // ---------- Consultas ----------
 
   tileOf(p: { x: number; y: number }): [number, number] {
     return [Math.round(p.x), Math.round(p.y)];
@@ -141,6 +144,8 @@ export class Game {
   }
 
   speedOf(p: Player): number {
+    if (p.curse === 'slow') return BASE_SPEED * 0.55;
+    if (p.curse === 'fast') return BASE_SPEED + (MAX_SPEED_LV + 3) * SPEED_STEP;
     return BASE_SPEED + p.speedLv * SPEED_STEP;
   }
 
@@ -153,6 +158,7 @@ export class Game {
   canPlaceBomb(p: Player): boolean {
     const [tx, ty] = this.tileOf(p);
     return p.alive
+      && p.curse !== 'nobomb'
       && this.tiles[this.idx(tx, ty)] === TILE.Empty
       && !this.bombAt(tx, ty)
       && this.bombsOf(p) < p.maxBombs;
@@ -161,7 +167,7 @@ export class Game {
   private canEnter(p: Player, x: number, y: number): boolean {
     if (!this.inBounds(x, y) || this.tiles[this.idx(x, y)] !== TILE.Empty) return false;
     const b = this.bombAt(x, y);
-    return !b || b.passable.has(p.id);
+    return !b || b.passable.has(p.id) || b.flight !== null;
   }
 
   aliveCount(): number {
@@ -175,6 +181,21 @@ export class Game {
   step(inputs: readonly PlayerInput[], dt = STEP): void {
     if (this.phase === 'over') return;
 
+    if (this.phase === 'starting') {
+      const before = Math.ceil(this.startTimer);
+      this.startTimer -= dt;
+      const now = Math.ceil(this.startTimer);
+      if (this.startTimer <= 0) {
+        this.startTimer = 0;
+        this.phase = 'playing';
+        this.events.push({ type: 'go' });
+      } else if (now !== before) {
+        this.events.push({ type: 'countdown', value: now });
+      }
+      for (const p of this.players) this.applyFloor(p, dt, false);
+      return;
+    }
+
     if (this.phase === 'playing') {
       const before = this.timeLeft;
       this.timeLeft = Math.max(0, this.timeLeft - dt);
@@ -187,25 +208,95 @@ export class Game {
         p.deadFor += dt;
         continue;
       }
-      const input = inputs[p.id] ?? NO_INPUT;
-      this.move(p, input.dir, this.speedOf(p) * dt);
-      if (input.bomb) this.placeBomb(p);
+      this.updatePlayer(p, inputs[p.id] ?? NO_INPUT, dt);
     }
 
+    this.spreadCurses();
     this.updateBombs(dt);
     this.updateFlames(dt);
     this.checkPlayers();
     this.checkEnd(dt);
   }
 
+  private updatePlayer(p: Player, input: PlayerInput, dt: number): void {
+    if (p.invuln > 0) p.invuln = Math.max(0, p.invuln - dt);
+    if (p.curse) {
+      p.curseTime -= dt;
+      if (p.curseTime <= 0) {
+        p.curse = null;
+        p.curseTime = 0;
+      }
+    }
+
+    let dir = input.dir;
+    if (p.curse === 'reverse') dir = OPPOSITE[dir];
+
+    const [tx, ty] = this.tileOf(p);
+    const onIce = this.floor[this.idx(tx, ty)] === FLOOR.Ice;
+    const speed = this.speedOf(p);
+    if (onIce) {
+      if (dir) p.iceDir = dir;
+      else dir = p.iceDir;
+    } else if (p.iceDir && !dir) {
+      // Recién salido del hielo: terminar el patinazo en el centro de la casilla.
+      const d = p.iceDir;
+      const along = DX[d] ? (tx - p.x) * DX[d] : (ty - p.y) * DY[d];
+      if (along > 1e-6) this.move(p, d, Math.min(along, speed * dt), false);
+      if (along <= speed * dt) p.iceDir = 0;
+    } else {
+      p.iceDir = 0;
+    }
+
+    const ox = p.x;
+    const oy = p.y;
+    this.move(p, dir, speed * dt, true);
+    if (onIce && dir && p.x === ox && p.y === oy) p.iceDir = 0;
+
+    this.applyFloor(p, dt, true);
+
+    // Bomba: si estoy encima de una y sé lanzar, la lanzo; si no, pongo una.
+    if (input.bomb && p.throw) {
+      const [bx, by] = this.tileOf(p);
+      const under = this.bombAt(bx, by);
+      if (under && !under.flight && this.throwBomb(p, under)) return;
+    }
+    if (input.bomb || p.curse === 'diarrhea') this.placeBomb(p);
+  }
+
+  /** Cintas y portales. */
+  private applyFloor(p: Player, dt: number, teleports: boolean): void {
+    if (!p.alive) return;
+    let [tx, ty] = this.tileOf(p);
+    let k = this.idx(tx, ty);
+    const conv = conveyorDir(this.floor[k]);
+    if (conv) {
+      this.move(p, conv, CONVEYOR_SPEED * dt, false);
+      [tx, ty] = this.tileOf(p);
+      k = this.idx(tx, ty);
+    }
+    if (k !== p.tpLock) p.tpLock = -1;
+    if (!teleports || this.floor[k] !== FLOOR.Teleport || p.tpLock === k) return;
+    const targets = this.teleports.filter((t) => t !== k && !this.bombAt(t % this.w, Math.floor(t / this.w)));
+    if (targets.length === 0) return;
+    const dest = targets[this.rng.int(targets.length)];
+    p.x = dest % this.w;
+    p.y = Math.floor(dest / this.w);
+    p.tpLock = dest;
+    p.iceDir = 0;
+    this.events.push({ type: 'teleport', player: p.id, fromX: tx, fromY: ty, x: p.x, y: p.y });
+  }
+
   /**
    * Movimiento libre con ayuda en las esquinas: el jugador se alinea solo con
    * el pasillo y, si choca con una esquina, se desliza hacia el hueco libre.
+   * `own` = lo mueve el propio jugador (cambia hacia dónde mira y puede patear).
    */
-  private move(p: Player, dir: Dir, dist: number): void {
-    p.moving = dir !== 0;
+  private move(p: Player, dir: Dir, dist: number, own: boolean): void {
+    if (own) {
+      p.moving = dir !== 0;
+      if (dir) p.facing = dir;
+    }
     if (dir === 0) return;
-    p.facing = dir;
 
     const horiz = dir === 3 || dir === 4;
     const s = horiz ? DX[dir] : DY[dir];
@@ -229,12 +320,12 @@ export class Game {
       const toCenter = s * (ca - pa);
       if (toCenter > 1e-6) {
         pa += s * Math.min(dist, toCenter);
-      } else if (Math.abs(off) < 0.15 && p.kick && this.tryKick(p, dir, horiz ? ca + s : cb, horiz ? cb : ca + s)) {
+      } else if (own && Math.abs(off) < 0.15 && p.kick && this.tryKick(p, dir, horiz ? ca + s : cb, horiz ? cb : ca + s)) {
         // bomba pateada
-      } else if (Math.abs(off) > 1e-6) {
+      } else if (own && Math.abs(off) > 1e-6) {
         // Ayuda en esquinas: deslizarse hacia el lado abierto.
         const t = Math.sign(off);
-        if (free(ca + s, cb + t) && free(ca, cb + t)) pb += t * dist;
+        if (free(ca + s, cb + t) && free(ca, cb + t)) pb += t * Math.min(dist, Math.abs(cb + t - pb));
       }
     }
 
@@ -243,12 +334,46 @@ export class Game {
 
   private tryKick(p: Player, dir: Dir, bx: number, by: number): boolean {
     const b = this.bombAt(bx, by);
-    if (!b || b.slide !== 0 || b.passable.has(p.id)) return false;
+    if (!b || b.slide !== 0 || b.flight || b.passable.has(p.id)) return false;
     if (this.blockedForBomb(bx + DX[dir], by + DY[dir])) return false;
     b.slide = dir;
+    b.slideSpeed = KICK_SPEED;
     b.offset = 0;
     b.passable.clear();
     this.events.push({ type: 'kick' });
+    return true;
+  }
+
+  private throwBomb(p: Player, b: Bomb): boolean {
+    const dir: Dir = p.facing || 2;
+    let x = b.tx + DX[dir] * THROW_DIST;
+    let y = b.ty + DY[dir] * THROW_DIST;
+    // Si cae en algo ocupado, sigue rebotando hacia delante.
+    while (this.inBounds(x, y) && (this.tiles[this.idx(x, y)] !== TILE.Empty || this.bombAt(x, y))) {
+      x += DX[dir];
+      y += DY[dir];
+    }
+    if (!this.inBounds(x, y)) {
+      // Se saldría del mapa: buscar el hueco libre más lejano antes.
+      let found = false;
+      for (let d = THROW_DIST - 1; d >= 1; d--) {
+        x = b.tx + DX[dir] * d;
+        y = b.ty + DY[dir] * d;
+        if (this.inBounds(x, y) && this.tiles[this.idx(x, y)] === TILE.Empty && !this.bombAt(x, y)) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) return false;
+    }
+    const dist = Math.abs(x - b.tx) + Math.abs(y - b.ty);
+    b.flight = { fromX: b.tx, fromY: b.ty, t: 0, dur: 0.25 + dist * 0.06 };
+    b.tx = x;
+    b.ty = y;
+    b.slide = 0;
+    b.offset = 0;
+    b.passable.clear();
+    this.events.push({ type: 'throw' });
     return true;
   }
 
@@ -263,7 +388,10 @@ export class Game {
     for (const q of this.players) {
       if (q.alive && Math.abs(q.x - tx) < 1 && Math.abs(q.y - ty) < 1) passable.add(q.id);
     }
-    this.bombs.push({ id: this.nextBombId++, owner, tx, ty, fuse, range, passable, slide: 0, offset: 0 });
+    this.bombs.push({
+      id: this.nextBombId++, owner, tx, ty, fuse, range, passable,
+      slide: 0, slideSpeed: 0, offset: 0, flight: null,
+    });
     this.events.push({ type: 'bomb', x: tx, y: ty });
   }
 
@@ -271,6 +399,21 @@ export class Game {
     if (!this.inBounds(x, y) || this.tiles[this.idx(x, y)] !== TILE.Empty) return true;
     if (this.bombAt(x, y)) return true;
     return this.players.some((q) => q.alive && Math.round(q.x) === x && Math.round(q.y) === y);
+  }
+
+  private spreadCurses(): void {
+    const alive = this.players.filter((p) => p.alive);
+    for (const a of alive) {
+      if (!a.curse) continue;
+      for (const b of alive) {
+        if (b === a || b.curse) continue;
+        if (Math.abs(a.x - b.x) < 0.8 && Math.abs(a.y - b.y) < 0.8) {
+          b.curse = a.curse;
+          b.curseTime = CURSE_TIME;
+          this.events.push({ type: 'curse', player: b.id, curse: b.curse });
+        }
+      }
+    }
   }
 
   private updateRain(dt: number): void {
@@ -289,26 +432,58 @@ export class Game {
 
   private updateBombs(dt: number): void {
     for (const b of this.bombs) {
+      b.fuse -= dt;
+
+      if (b.flight) {
+        b.flight.t += dt;
+        if (b.flight.t >= b.flight.dur) {
+          b.flight = null;
+          for (const q of this.players) {
+            if (q.alive && Math.round(q.x) === b.tx && Math.round(q.y) === b.ty) b.passable.add(q.id);
+          }
+          this.events.push({ type: 'land', x: b.tx, y: b.ty });
+        } else {
+          b.fuse = Math.max(b.fuse, 0.05); // no explota en el aire
+          continue;
+        }
+      }
+
       // Quien se ha salido de la bomba ya no puede volver a entrar.
       for (const id of b.passable) {
         const q = this.players[id];
         if (!q.alive || Math.round(q.x) !== b.tx || Math.round(q.y) !== b.ty) b.passable.delete(id);
       }
+
+      // Las cintas arrastran las bombas quietas.
+      if (b.slide === 0) {
+        const conv = conveyorDir(this.floor[this.idx(b.tx, b.ty)]);
+        if (conv && !this.blockedForBomb(b.tx + DX[conv], b.ty + DY[conv])) {
+          b.slide = conv;
+          b.slideSpeed = CONVEYOR_SPEED;
+          b.offset = 0;
+        }
+      }
+
       if (b.slide !== 0) {
         const nx = b.tx + DX[b.slide];
         const ny = b.ty + DY[b.slide];
         if (b.offset === 0 && this.blockedForBomb(nx, ny)) {
           b.slide = 0;
         } else {
-          b.offset += KICK_SPEED * dt;
+          b.offset += b.slideSpeed * dt;
           if (b.offset >= 1) {
             b.tx = nx;
             b.ty = ny;
             b.offset = 0;
+            b.passable.clear();
+            // Al salir de una cinta (o cambiar de sentido) deja de arrastrarse.
+            if (b.slideSpeed === CONVEYOR_SPEED) {
+              const conv = conveyorDir(this.floor[this.idx(nx, ny)]);
+              if (conv !== b.slide) b.slide = 0;
+            }
           }
         }
       }
-      b.fuse -= dt;
       // Una bomba que entra en una llama explota.
       if (this.flames[this.idx(b.tx, b.ty)] > 0) b.fuse = 0;
     }
@@ -317,7 +492,7 @@ export class Game {
     while (again) {
       again = false;
       for (const b of this.bombs.slice()) {
-        if (b.fuse <= 0 && this.bombs.includes(b)) {
+        if (b.fuse <= 0 && !b.flight && this.bombs.includes(b)) {
           this.explode(b);
           again = true;
         }
@@ -344,7 +519,7 @@ export class Game {
           break;
         }
         const other = this.bombAt(x, y);
-        if (other) {
+        if (other && !other.flight) {
           other.fuse = 0; // reacción en cadena
           this.addFlame(x, y, mask);
           break;
@@ -383,7 +558,7 @@ export class Game {
       }
       this.burning.delete(k);
       this.tiles[k] = TILE.Empty;
-      if (this.rng.next() < POWER_CHANCE) this.powerups[k] = this.randomPower();
+      if (this.rng.next() < this.powerChance) this.powerups[k] = this.randomPower();
     }
   }
 
@@ -397,22 +572,33 @@ export class Game {
     return POWER.Bomb;
   }
 
+  /** Pone un power-up en una casilla (para tests y modos especiales). */
+  dropPowerup(x: number, y: number, power: PowerType): void {
+    this.powerups[this.idx(x, y)] = power;
+  }
+
   private checkPlayers(): void {
     for (const p of this.players) {
       if (!p.alive) continue;
       const [tx, ty] = this.tileOf(p);
       const k = this.idx(tx, ty);
-      if (this.flames[k] > 0) {
-        p.alive = false;
-        p.moving = false;
-        this.events.push({ type: 'death', player: p.id });
-        continue;
+      if (this.flames[k] > 0 && p.invuln <= 0) {
+        if (p.shield) {
+          p.shield = false;
+          p.invuln = SHIELD_INVULN;
+          this.events.push({ type: 'shieldBreak', player: p.id });
+        } else {
+          p.alive = false;
+          p.moving = false;
+          this.events.push({ type: 'death', player: p.id });
+          continue;
+        }
       }
       const pw = this.powerups[k];
       if (pw >= 0) {
         this.powerups[k] = -1;
         this.applyPower(p, pw as PowerType);
-        this.events.push({ type: 'pickup', player: p.id, power: pw as PowerType });
+        this.events.push({ type: 'pickup', player: p.id, power: pw as PowerType, x: tx, y: ty });
       }
     }
   }
@@ -423,6 +609,13 @@ export class Game {
       case POWER.Fire: p.range = Math.min(MAX_RANGE, p.range + 1); break;
       case POWER.Speed: p.speedLv = Math.min(MAX_SPEED_LV, p.speedLv + 1); break;
       case POWER.Kick: p.kick = true; break;
+      case POWER.Throw: p.throw = true; break;
+      case POWER.Shield: p.shield = true; break;
+      case POWER.Curse:
+        p.curse = CURSES[this.rng.int(CURSES.length)];
+        p.curseTime = CURSE_TIME;
+        this.events.push({ type: 'curse', player: p.id, curse: p.curse });
+        break;
     }
   }
 

@@ -62,8 +62,14 @@ Juego web de acción en cuadrícula con bombas, protagonizado por monstruos. Per
 - Las entradas (teclado, táctil, IA y en el futuro la red) se traducen todas a la misma estructura de "intención": dirección + poner bomba.
 
 ## Fases
-1. **Prototipo de batalla**: mapa, movimiento, bombas, explosiones, bloques, power-ups básicos y rivales con IA. ← *en curso*
-2. Batalla completa: rondas, lluvia de bombas, resto de power-ups, mapas especiales, menús.
+1. **Prototipo de batalla**: mapa, movimiento, bombas, explosiones, bloques, power-ups básicos y rivales con IA. ✅
+2. **Batalla completa** ← *en curso*
+   - ✅ Power-ups: patear, lanzar (pulsar bomba dos veces), escudo y 5 maldiciones contagiosas (lento, acelerado, controles al revés, bombas sin control, sin bombas)
+   - ✅ Mapas: Cripta clásica, Portales, Fábrica (cintas), Lago helado y «al azar»
+   - ✅ Cuenta atrás, lluvia de bombas, partículas, textos flotantes
+   - ✅ Efectos de sonido sintetizados y botón de silencio
+   - ✅ Tests automáticos de la lógica (`npm test`)
+   - Pendiente: música, elegir el monstruo/color, IA que use portales y escudo con cabeza
 3. Modo historia.
 4. Arte, sonido y pulido.
 5. Online con Colyseus.

@@ -1,8 +1,10 @@
 import Phaser from 'phaser';
 import { Game, STEP } from '../core/game';
 import { BotBrain } from '../core/ai';
-import { POWER, TILE, type Difficulty, type PlayerInput } from '../core/types';
+import { MAPS, type MapId } from '../core/maps';
+import { FLOOR, POWER, TILE, conveyorDir, type CurseType, type Difficulty, type GameEvent, type PlayerInput } from '../core/types';
 import type { Controls } from '../input/controls';
+import { sfx } from '../audio/sfx';
 import { PLAYER_COLORS } from '../theme';
 
 export interface MatchSettings {
@@ -10,6 +12,7 @@ export interface MatchSettings {
   difficulty: Difficulty;
   roundsToWin: number;
   roundTime: number;
+  map: MapId;
 }
 
 export interface MatchHooks {
@@ -22,6 +25,18 @@ interface SceneData {
   wins: number[];
   round: number;
   hooks: MatchHooks;
+}
+
+interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  max: number;
+  color: number;
+  size: number;
+  gravity: number;
 }
 
 const T = 48; // píxeles por casilla
@@ -41,8 +56,27 @@ const C = {
   burn: 0xe8772e,
   flameOut: 0xff6a1a,
   flameIn: 0xffe066,
+  flameCore: 0xfff6d0,
   bomb: 0x23213a,
   rainBomb: 0x5a1f2a,
+  ice: 0x9fd8ef,
+  iceB: 0x8ccbe6,
+  belt: 0x3b3f4a,
+  beltArrow: 0xf2c14e,
+  portal: 0x7b3fe4,
+  portalGlow: 0xc9a2ff,
+  shield: 0x7fe7ff,
+  curse: 0xb04dff,
+};
+
+const POWER_COLORS = [0x3c3c78, 0xb8321f, 0x2b6bd9, 0x2f9a4a, 0x0f8f8f, 0x2a7fbf, 0x2b1b3a];
+const POWER_LABELS = ['+1 bomba', '+fuego', '+velocidad', 'patada', 'lanzar', 'escudo', 'maldición'];
+const CURSE_LABELS: Record<CurseType, string> = {
+  slow: '¡lento!',
+  fast: '¡acelerado!',
+  reverse: '¡al revés!',
+  diarrhea: '¡bombas sin control!',
+  nobomb: '¡sin bombas!',
 };
 
 export class BattleScene extends Phaser.Scene {
@@ -53,10 +87,13 @@ export class BattleScene extends Phaser.Scene {
   private time_ = 0;
   private gStatic!: Phaser.GameObjects.Graphics;
   private gDyn!: Phaser.GameObjects.Graphics;
+  private gFx!: Phaser.GameObjects.Graphics;
   private gHud!: Phaser.GameObjects.Graphics;
   private timerText!: Phaser.GameObjects.Text;
   private winTexts: Phaser.GameObjects.Text[] = [];
   private roundText!: Phaser.GameObjects.Text;
+  private statsText!: Phaser.GameObjects.Text;
+  private particles: Particle[] = [];
   private shake = 0;
   private roundHandled = false;
   paused = false;
@@ -73,6 +110,7 @@ export class BattleScene extends Phaser.Scene {
     this.roundHandled = false;
     this.paused = false;
     this.winTexts = [];
+    this.particles = [];
   }
 
   create(): void {
@@ -81,6 +119,7 @@ export class BattleScene extends Phaser.Scene {
       players: settings.players,
       seed: (Date.now() ^ (this.data_.round * 7919)) >>> 0,
       roundTime: settings.roundTime,
+      map: settings.map,
     });
     this.bots = this.match.players.slice(1).map((p) => new BotBrain(p.id, settings.difficulty));
     this.data_.hooks.controls.reset();
@@ -92,16 +131,23 @@ export class BattleScene extends Phaser.Scene {
 
     this.gStatic = this.add.graphics();
     this.gDyn = this.add.graphics();
+    this.gFx = this.add.graphics();
     this.gHud = this.add.graphics();
     this.drawStatic();
 
     const font = { fontFamily: 'system-ui, sans-serif', fontStyle: 'bold' };
-    this.timerText = this.add.text(W / 2, HUD / 2, '', { ...font, fontSize: '26px', color: '#ffffff' }).setOrigin(0.5);
-    this.roundText = this.add.text(W - 12, HUD / 2, `Ronda ${this.data_.round}`, { ...font, fontSize: '16px', color: '#b9b3d6' }).setOrigin(1, 0.5);
+    this.timerText = this.add.text(W / 2, 22, '', { ...font, fontSize: '24px', color: '#ffffff' }).setOrigin(0.5);
+    this.roundText = this.add.text(W / 2, 45, '', { ...font, fontSize: '11px', color: '#b9b3d6' }).setOrigin(0.5);
+    this.statsText = this.add.text(W - 12, HUD / 2, '', { ...font, fontSize: '15px', color: '#ffffff' }).setOrigin(1, 0.5);
     this.match.players.forEach(() => {
       const t = this.add.text(0, 0, '', { ...font, fontSize: '15px', color: '#ffffff' }).setOrigin(0, 0.5);
       this.winTexts.push(t);
     });
+
+    const mapName = this.match.mapId;
+    if (settings.map === 'random') this.floatText(W / 2, HUD + 40, `Mapa: ${MAPS.find((m) => m.id === mapName)?.name ?? mapName}`, '#ffffff', 20, 2200);
+    this.bigText('3');
+    sfx.countdown(false);
   }
 
   update(_t: number, deltaMs: number): void {
@@ -116,13 +162,13 @@ export class BattleScene extends Phaser.Scene {
       this.match.step(inputs);
       this.acc -= STEP;
     }
-    for (const e of this.match.events) {
-      if (e.type === 'explode') this.shake = Math.min(this.shake + 0.12, 0.3);
-    }
+    for (const e of this.match.events) this.onEvent(e);
     this.match.events.length = 0;
     this.shake = Math.max(0, this.shake - dt);
+    this.updateParticles(dt);
 
     this.drawDynamic();
+    this.drawFx();
     this.drawHud();
 
     if (this.match.phase === 'over' && !this.roundHandled) {
@@ -130,10 +176,128 @@ export class BattleScene extends Phaser.Scene {
       const { settings, wins, round, hooks } = this.data_;
       const w = wins.slice();
       if (this.match.winner >= 0) w[this.match.winner]++;
+      if (this.match.winner === 0) sfx.win();
       hooks.onRoundOver(this.match.winner, w, settings, () => {
         this.scene.restart({ settings, wins: w, round: round + 1, hooks });
       });
     }
+  }
+
+  // ---------- Eventos: sonido y efectos ----------
+
+  private onEvent(e: GameEvent): void {
+    const px = (x: number) => x * T + T / 2;
+    const py = (y: number) => y * T + T / 2 + HUD;
+    switch (e.type) {
+      case 'countdown':
+        this.bigText(String(e.value));
+        sfx.countdown(false);
+        break;
+      case 'go':
+        this.bigText('¡YA!');
+        sfx.countdown(true);
+        break;
+      case 'bomb':
+        sfx.place();
+        break;
+      case 'explode':
+        this.shake = Math.min(this.shake + 0.14, 0.35);
+        this.burst(px(e.x), py(e.y), [C.flameIn, C.flameOut, 0xffffff], 14, 220, 0.5);
+        sfx.explode();
+        break;
+      case 'pickup': {
+        const good = e.power !== POWER.Curse;
+        this.burst(px(e.x), py(e.y), good ? [0xffffff, 0xffe066] : [C.curse, 0x000000], 10, 120, 0.6, -200);
+        if (e.player === 0) {
+          this.floatText(px(e.x), py(e.y) - 20, POWER_LABELS[e.power], good ? '#ffe066' : '#d9a6ff');
+        }
+        if (good) sfx.pickup();
+        break;
+      }
+      case 'curse': {
+        const p = this.match.players[e.player];
+        this.floatText(px(p.x), py(p.y) - 26, CURSE_LABELS[e.curse], '#d9a6ff');
+        sfx.curse();
+        break;
+      }
+      case 'death': {
+        const p = this.match.players[e.player];
+        this.burst(px(p.x), py(p.y), [PLAYER_COLORS[e.player], 0xffffff], 22, 260, 0.8);
+        sfx.death();
+        break;
+      }
+      case 'shieldBreak': {
+        const p = this.match.players[e.player];
+        this.burst(px(p.x), py(p.y), [C.shield, 0xffffff], 16, 200, 0.5);
+        sfx.shield();
+        break;
+      }
+      case 'teleport':
+        this.burst(px(e.fromX), py(e.fromY), [C.portalGlow, C.portal], 10, 140, 0.4);
+        this.burst(px(e.x), py(e.y), [C.portalGlow, 0xffffff], 14, 160, 0.5);
+        sfx.teleport();
+        break;
+      case 'kick':
+        sfx.kick();
+        break;
+      case 'throw':
+        sfx.throw();
+        break;
+      case 'land':
+        this.burst(px(e.x), py(e.y), [0xcccccc, 0x888888], 6, 80, 0.3);
+        sfx.land();
+        break;
+      case 'rainStart':
+        this.bigText('¡LLUVIA DE BOMBAS!', '#ff6a6a', 40);
+        sfx.alarm();
+        break;
+    }
+  }
+
+  private burst(x: number, y: number, colors: number[], n: number, speed: number, life: number, gravity = 300): void {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const v = speed * (0.4 + Math.random() * 0.6);
+      this.particles.push({
+        x, y,
+        vx: Math.cos(a) * v,
+        vy: Math.sin(a) * v - speed * 0.3,
+        life: life * (0.6 + Math.random() * 0.4),
+        max: life,
+        color: colors[i % colors.length],
+        size: 2 + Math.random() * 3,
+        gravity,
+      });
+    }
+  }
+
+  private updateParticles(dt: number): void {
+    for (const p of this.particles) {
+      p.life -= dt;
+      p.vy += p.gravity * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+    }
+    this.particles = this.particles.filter((p) => p.life > 0);
+  }
+
+  private floatText(x: number, y: number, text: string, color: string, size = 16, ms = 900): void {
+    const t = this.add.text(x, y, text, {
+      fontFamily: 'system-ui, sans-serif', fontStyle: 'bold', fontSize: `${size}px`, color,
+      stroke: '#000000', strokeThickness: 4,
+    }).setOrigin(0.5).setDepth(20);
+    this.tweens.add({ targets: t, y: y - 30, alpha: 0, duration: ms, ease: 'Cubic.easeIn', onComplete: () => t.destroy() });
+  }
+
+  private bigText(text: string, color = '#ffffff', size = 72): void {
+    const W = this.match.w * T;
+    const H = this.match.h * T + HUD;
+    const t = this.add.text(W / 2, H / 2, text, {
+      fontFamily: 'system-ui, sans-serif', fontStyle: 'bold', fontSize: `${size}px`, color,
+      stroke: '#1a1726', strokeThickness: 10,
+    }).setOrigin(0.5).setDepth(30).setScale(1.6).setAlpha(0);
+    this.tweens.add({ targets: t, scale: 1, alpha: 1, duration: 180, ease: 'Back.easeOut' });
+    this.tweens.add({ targets: t, alpha: 0, delay: 650, duration: 300, onComplete: () => t.destroy() });
   }
 
   // ---------- Dibujo ----------
@@ -146,16 +310,30 @@ export class BattleScene extends Phaser.Scene {
       for (let x = 0; x < game.w; x++) {
         const px = x * T;
         const py = y * T + HUD;
-        if (game.tiles[game.idx(x, y)] === TILE.Solid) {
+        const k = game.idx(x, y);
+        if (game.tiles[k] === TILE.Solid) {
           g.fillStyle(C.stoneDark).fillRect(px, py, T, T);
           g.fillStyle(C.stone).fillRect(px + 2, py + 2, T - 4, T - 8);
           g.fillStyle(C.stoneTop).fillRect(px + 2, py + 2, T - 4, 6);
+          continue;
+        }
+        const f = game.floor[k];
+        if (f === FLOOR.Ice) {
+          g.fillStyle((x + y) % 2 === 0 ? C.ice : C.iceB).fillRect(px, py, T, T);
+          g.fillStyle(0xffffff, 0.5).fillRect(px + 8, py + 10, 12, 3).fillRect(px + 26, py + 30, 9, 3);
+        } else if (conveyorDir(f)) {
+          g.fillStyle(C.belt).fillRect(px, py, T, T);
+          g.fillStyle(0x2a2d36).fillRect(px, py, T, 3).fillRect(px, py + T - 3, T, 3);
         } else {
           g.fillStyle((x + y) % 2 === 0 ? C.floorA : C.floorB).fillRect(px, py, T, T);
-          // sombra de la pared de arriba
-          if (y > 0 && game.tiles[game.idx(x, y - 1)] === TILE.Solid) {
-            g.fillStyle(C.floorShade).fillRect(px, py, T, 8);
-          }
+        }
+        if (f === FLOOR.Teleport) {
+          g.fillStyle(0x1b0f33).fillEllipse(px + T / 2, py + T / 2, T * 0.85, T * 0.7);
+          g.lineStyle(3, C.portal).strokeEllipse(px + T / 2, py + T / 2, T * 0.85, T * 0.7);
+        }
+        // sombra de la pared de arriba
+        if (y > 0 && game.tiles[game.idx(x, y - 1)] === TILE.Solid && f !== FLOOR.Ice) {
+          g.fillStyle(0x000000, 0.18).fillRect(px, py, T, 8);
         }
       }
     }
@@ -169,6 +347,7 @@ export class BattleScene extends Phaser.Scene {
     const sy = this.shake > 0 ? (Math.random() - 0.5) * this.shake * 14 : 0;
     this.gStatic.setPosition(sx, sy);
     g.setPosition(sx, sy);
+    this.gFx.setPosition(sx, sy);
 
     for (let y = 0; y < game.h; y++) {
       for (let x = 0; x < game.w; x++) {
@@ -176,6 +355,14 @@ export class BattleScene extends Phaser.Scene {
         const px = x * T;
         const py = y * T + HUD;
         const t = game.tiles[k];
+        const f = game.floor[k];
+        // Suelos animados.
+        const conv = conveyorDir(f);
+        if (conv && t === TILE.Empty) this.drawBeltArrows(g, px, py, conv);
+        if (f === FLOOR.Teleport) {
+          const pulse = 0.5 + 0.5 * Math.sin(this.time_ * 4 + k);
+          g.fillStyle(C.portalGlow, 0.25 + pulse * 0.35).fillEllipse(px + T / 2, py + T / 2, T * 0.55 * (0.8 + pulse * 0.2), T * 0.42);
+        }
         if (t === TILE.Soft) {
           g.fillStyle(C.softLine).fillRect(px + 1, py + 1, T - 2, T - 2);
           g.fillStyle(C.soft).fillRect(px + 3, py + 3, T - 6, T - 8);
@@ -194,14 +381,26 @@ export class BattleScene extends Phaser.Scene {
     }
 
     for (const b of game.bombs) {
-      const fx = b.slide ? (b.slide === 3 ? -b.offset : b.slide === 4 ? b.offset : 0) : 0;
-      const fy = b.slide ? (b.slide === 1 ? -b.offset : b.slide === 2 ? b.offset : 0) : 0;
-      const cx = (b.tx + fx) * T + T / 2;
-      const cy = (b.ty + fy) * T + T / 2 + HUD;
+      let bx = b.tx;
+      let by = b.ty;
+      let lift = 0;
+      if (b.flight) {
+        const f = Math.min(1, b.flight.t / b.flight.dur);
+        bx = b.flight.fromX + (b.tx - b.flight.fromX) * f;
+        by = b.flight.fromY + (b.ty - b.flight.fromY) * f;
+        lift = Math.sin(f * Math.PI) * T * 1.3;
+      } else if (b.slide) {
+        bx += b.slide === 3 ? -b.offset : b.slide === 4 ? b.offset : 0;
+        by += b.slide === 1 ? -b.offset : b.slide === 2 ? b.offset : 0;
+      }
+      const cx = bx * T + T / 2;
+      const ground = by * T + T / 2 + HUD;
+      const cy = ground - lift;
       const pulse = 1 + 0.08 * Math.sin((b.fuse < 1 ? 26 : 12) * b.fuse);
       const r = T * 0.33 * pulse;
-      g.fillStyle(0x000000, 0.25).fillEllipse(cx, cy + r * 0.9, r * 1.8, r * 0.6);
+      g.fillStyle(0x000000, 0.25).fillEllipse(cx, ground + r * 0.9, r * 1.8 * (1 - lift / (T * 3)), r * 0.6);
       g.fillStyle(b.owner < 0 ? C.rainBomb : C.bomb).fillCircle(cx, cy, r);
+      if (b.fuse < 0.8 && Math.sin(this.time_ * 30) > 0) g.fillStyle(0xff3030, 0.35).fillCircle(cx, cy, r);
       g.fillStyle(0xffffff, 0.35).fillCircle(cx - r * 0.35, cy - r * 0.35, r * 0.25);
       g.fillStyle(0x8c7a5a).fillRect(cx + r * 0.3, cy - r * 1.15, 4, r * 0.5);
       g.fillStyle(Math.sin(this.time_ * 40) > 0 ? 0xffe066 : 0xff6a1a).fillCircle(cx + r * 0.4, cy - r * 1.2, 4);
@@ -216,17 +415,33 @@ export class BattleScene extends Phaser.Scene {
       const cy = y * T + T / 2 + HUD;
       const m = game.flameMask[k];
       const s = Math.min(1, f * 4);
-      for (const [col, size] of [[C.flameOut, 0.8], [C.flameIn, 0.45]] as const) {
-        const w = T * size * s;
+      const flicker = 1 + Math.sin(this.time_ * 50 + k) * 0.06;
+      for (const [col, size] of [[C.flameOut, 0.86], [C.flameIn, 0.55], [C.flameCore, 0.25]] as const) {
+        const w = T * size * s * flicker;
         g.fillStyle(col);
         if (m & 1) g.fillRect(x * T, cy - w / 2, T, w);
         if (m & 2) g.fillRect(cx - w / 2, y * T + HUD, w, T);
-        if (m & 4) g.fillCircle(cx, cy, w * 0.62);
+        if (m & 4) g.fillCircle(cx, cy, w * 0.66);
       }
     }
 
     const order = game.players.slice().sort((a, b) => a.y - b.y);
     for (const p of order) this.drawMonster(g, p.id);
+  }
+
+  private drawBeltArrows(g: Phaser.GameObjects.Graphics, px: number, py: number, dir: number): void {
+    const phase = (this.time_ * 1.8) % 1;
+    g.fillStyle(C.beltArrow, 0.75);
+    for (let i = 0; i < 2; i++) {
+      const o = ((phase + i * 0.5) % 1) * T;
+      const cx = px + T / 2;
+      const cy = py + T / 2;
+      const s = 7;
+      if (dir === 4) { const x = px + o; g.fillTriangle(x - s, cy - s, x - s, cy + s, x + 1, cy); }
+      else if (dir === 3) { const x = px + T - o; g.fillTriangle(x + s, cy - s, x + s, cy + s, x - 1, cy); }
+      else if (dir === 2) { const y = py + o; g.fillTriangle(cx - s, y - s, cx + s, y - s, cx, y + 1); }
+      else { const y = py + T - o; g.fillTriangle(cx - s, y + s, cx + s, y + s, cx, y - 1); }
+    }
   }
 
   private drawPowerup(g: Phaser.GameObjects.Graphics, type: number, px: number, py: number): void {
@@ -236,10 +451,9 @@ export class BattleScene extends Phaser.Scene {
     const s = T - 12;
     const cx = x + s / 2;
     const cy = y + s / 2;
-    const bg = [0x3c3c78, 0xb8321f, 0x2b6bd9, 0x2f9a4a][type];
     g.fillStyle(0x000000, 0.3).fillRoundedRect(x + 2, y + 3, s, s, 7);
-    g.fillStyle(bg).fillRoundedRect(x, y, s, s, 7);
-    g.lineStyle(2, 0xffffff, 0.8).strokeRoundedRect(x, y, s, s, 7);
+    g.fillStyle(POWER_COLORS[type]).fillRoundedRect(x, y, s, s, 7);
+    g.lineStyle(2, type === POWER.Curse ? C.curse : 0xffffff, 0.85).strokeRoundedRect(x, y, s, s, 7);
     g.fillStyle(0xffffff);
     switch (type) {
       case POWER.Bomb:
@@ -258,6 +472,23 @@ export class BattleScene extends Phaser.Scene {
         g.fillRect(cx - 6, cy - 10, 8, 14);
         g.fillRoundedRect(cx - 6, cy + 2, 16, 8, 3);
         break;
+      case POWER.Throw:
+        // mano abierta
+        g.fillRoundedRect(cx - 8, cy - 2, 16, 12, 4);
+        for (let i = 0; i < 4; i++) g.fillRoundedRect(cx - 8 + i * 4.2, cy - 11, 3.4, 11, 1.5);
+        g.fillRoundedRect(cx + 7, cy - 3, 5, 8, 2);
+        break;
+      case POWER.Shield:
+        g.fillTriangle(cx - 10, cy - 9, cx + 10, cy - 9, cx, cy + 12);
+        g.fillRect(cx - 10, cy - 11, 20, 6);
+        g.fillStyle(POWER_COLORS[POWER.Shield]).fillTriangle(cx - 5, cy - 6, cx + 5, cy - 6, cx, cy + 5);
+        break;
+      case POWER.Curse:
+        // calavera
+        g.fillStyle(0xe8dcff).fillCircle(cx, cy - 2, 9).fillRect(cx - 5, cy + 4, 10, 6);
+        g.fillStyle(0x2b1b3a).fillCircle(cx - 3.5, cy - 2, 2.6).fillCircle(cx + 3.5, cy - 2, 2.6);
+        g.fillRect(cx - 1, cy + 5, 2, 5);
+        break;
     }
   }
 
@@ -270,6 +501,8 @@ export class BattleScene extends Phaser.Scene {
       if (p.deadFor > 0.9) return;
       scale = 1 + p.deadFor * 0.6;
       alpha = 1 - p.deadFor / 0.9;
+    } else if (p.invuln > 0 && Math.sin(this.time_ * 40) > 0) {
+      alpha = 0.35;
     }
     const bob = p.moving ? Math.abs(Math.sin(this.time_ * 14)) * 3 : Math.sin(this.time_ * 3) * 1;
     const cx = p.x * T + T / 2;
@@ -277,6 +510,10 @@ export class BattleScene extends Phaser.Scene {
     const r = T * 0.36 * scale;
 
     g.fillStyle(0x000000, 0.25 * alpha).fillEllipse(cx, p.y * T + T * 0.92 + HUD, r * 1.8, r * 0.55);
+    if (p.curse) {
+      const pulse = 0.5 + 0.5 * Math.sin(this.time_ * 10);
+      g.fillStyle(C.curse, 0.18 + pulse * 0.2).fillCircle(cx, cy, r * 1.45);
+    }
     // cuernos
     const dark = Phaser.Display.Color.ValueToColor(color).darken(30).color;
     g.fillStyle(dark, alpha);
@@ -295,8 +532,10 @@ export class BattleScene extends Phaser.Scene {
     const lx = p.facing === 3 ? -3 : p.facing === 4 ? 3 : 0;
     const ly = p.facing === 1 ? -3 : p.facing === 2 ? 2 : 0;
     if (p.alive) {
-      g.fillStyle(0xffffff).fillCircle(cx - r * 0.35, cy - r * 0.15, r * 0.3).fillCircle(cx + r * 0.35, cy - r * 0.15, r * 0.3);
-      g.fillStyle(0x111122).fillCircle(cx - r * 0.35 + lx, cy - r * 0.15 + ly, r * 0.14).fillCircle(cx + r * 0.35 + lx, cy - r * 0.15 + ly, r * 0.14);
+      g.fillStyle(0xffffff, alpha).fillCircle(cx - r * 0.35, cy - r * 0.15, r * 0.3).fillCircle(cx + r * 0.35, cy - r * 0.15, r * 0.3);
+      g.fillStyle(p.curse ? C.curse : 0x111122, alpha)
+        .fillCircle(cx - r * 0.35 + lx, cy - r * 0.15 + ly, r * 0.14)
+        .fillCircle(cx + r * 0.35 + lx, cy - r * 0.15 + ly, r * 0.14);
     } else {
       g.lineStyle(3, 0x111122, alpha);
       for (const ex of [-0.35, 0.35]) {
@@ -305,10 +544,23 @@ export class BattleScene extends Phaser.Scene {
         g.lineBetween(ox - 4, oy - 4, ox + 4, oy + 4).lineBetween(ox - 4, oy + 4, ox + 4, oy - 4);
       }
     }
+    if (p.alive && p.shield) {
+      g.lineStyle(3, C.shield, 0.55 + 0.25 * Math.sin(this.time_ * 6)).strokeCircle(cx, cy + 2, r * 1.35);
+      g.fillStyle(C.shield, 0.12).fillCircle(cx, cy + 2, r * 1.35);
+    }
     // marcador del jugador humano
     if (id === 0 && p.alive) {
       const ay = cy - r * 1.45 + Math.sin(this.time_ * 6) * 2;
       g.fillStyle(0xffffff).fillTriangle(cx - 6, ay - 6, cx + 6, ay - 6, cx, ay + 2);
+    }
+  }
+
+  private drawFx(): void {
+    const g = this.gFx;
+    g.clear();
+    for (const p of this.particles) {
+      g.fillStyle(p.color, Math.max(0, p.life / p.max));
+      g.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
     }
   }
 
@@ -323,11 +575,12 @@ export class BattleScene extends Phaser.Scene {
     const rain = game.timeLeft <= 0;
     this.timerText.setText(rain ? '¡LLUVIA!' : `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`);
     this.timerText.setColor(rain ? '#ff6a6a' : t <= 15 ? '#ffd84a' : '#ffffff');
+    this.roundText.setText(`RONDA ${this.data_.round} · GANA CON ${this.data_.settings.roundsToWin}`);
 
     // Fichas de jugadores a la izquierda del reloj.
     const n = game.players.length;
     const avail = W / 2 - 70;
-    const slot = Math.min(56, avail / n);
+    const slot = Math.min(52, avail / n);
     game.players.forEach((p, i) => {
       const x = 14 + i * slot;
       const y = HUD / 2;
@@ -337,7 +590,10 @@ export class BattleScene extends Phaser.Scene {
       const txt = this.winTexts[i];
       txt.setPosition(x + 21, y).setText(String(this.data_.wins[i])).setAlpha(p.alive ? 1 : 0.5);
     });
-    this.roundText.setText(`Ronda ${this.data_.round} · gana con ${this.data_.settings.roundsToWin}`);
+
+    // Lo que lleva el jugador humano, a la derecha.
+    const me = game.players[0];
+    const extras = [me.kick ? '🦶' : '', me.throw ? '✋' : '', me.shield ? '🛡️' : '', me.curse ? '☠️' : ''].join('');
+    this.statsText.setText(`💣${me.maxBombs}  🔥${me.range}  ⚡${me.speedLv}  ${extras}`);
   }
 }
-

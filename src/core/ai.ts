@@ -1,5 +1,5 @@
 import { FUSE, type Game } from './game';
-import { DIRS, DX, DY, NO_INPUT, TILE, type Difficulty, type Dir, type Player, type PlayerInput } from './types';
+import { DIRS, DX, DY, FLOOR, NO_INPUT, POWER, TILE, type Difficulty, type Dir, type Player, type PlayerInput } from './types';
 
 interface AiParams {
   /** Cada cuánto reacciona (segundos). Más alto = más torpe. */
@@ -75,6 +75,8 @@ export class BotBrain {
   private goal = -1;
   private wantsBombAtGoal = false;
   private lastDir: Dir = 0;
+  /** Acaba de poner una bomba para lanzarla en el siguiente paso. */
+  private throwNext = false;
 
   constructor(readonly id: number, difficulty: Difficulty) {
     this.p = PARAMS[difficulty];
@@ -86,6 +88,10 @@ export class BotBrain {
 
     this.reactTimer -= dt;
     this.rethinkTimer -= dt;
+    if (this.throwNext) {
+      this.throwNext = false;
+      return { dir: 0, bomb: true };
+    }
     if (this.reactTimer > 0) return { dir: this.lastDir, bomb: false };
     this.reactTimer = this.p.reaction;
 
@@ -99,6 +105,16 @@ export class BotBrain {
       this.goal = -1;
       const step = this.flee(g, cur, danger, speed);
       return this.go(g, me, step);
+    }
+
+    // 2a. Con guante: poner y lanzar a un rival que está a 3-4 casillas en línea.
+    if (me.throw && this.p.hunt >= 0.8 && g.canPlaceBomb(me) && g.rng.next() < this.p.bombProb * 0.5) {
+      const d = this.throwTarget(g, me, cx, cy);
+      if (d) {
+        this.throwNext = true;
+        this.lastDir = d;
+        return { dir: d, bomb: true };
+      }
     }
 
     // 2. Rival a tiro: bomba (niveles normal y difícil).
@@ -153,6 +169,7 @@ export class BotBrain {
   private walkable(g: Game, k: number, start: number): boolean {
     if (k === start) return true;
     if (g.tiles[k] !== TILE.Empty) return false;
+    if (g.floor[k] === FLOOR.Teleport) return false; // imprevisible: mejor evitarlos
     return !g.bombAt(k % g.w, Math.floor(k / g.w));
   }
 
@@ -210,6 +227,19 @@ export class BotBrain {
     return order.some((k) => d2[k] === Infinity);
   }
 
+  /** Dirección hacia un rival alineado a 3-4 casillas (donde caería la bomba lanzada). */
+  private throwTarget(g: Game, me: Player, x: number, y: number): Dir {
+    for (const q of g.players) {
+      if (!q.alive || q.id === me.id) continue;
+      const [qx, qy] = g.tileOf(q);
+      const dx = qx - x;
+      const dy = qy - y;
+      if (dy === 0 && Math.abs(dx) >= 3 && Math.abs(dx) <= 4) return dx > 0 ? 4 : 3;
+      if (dx === 0 && Math.abs(dy) >= 3 && Math.abs(dy) <= 4) return dy > 0 ? 2 : 1;
+    }
+    return 0;
+  }
+
   private enemyInBlast(g: Game, me: Player, x: number, y: number): boolean {
     const tiles = new Set(blastTiles(g, x, y, me.range));
     return g.players.some((q) => q.alive && q.id !== me.id && tiles.has(g.idx(...g.tileOf(q))));
@@ -234,7 +264,7 @@ export class BotBrain {
       const d = dist[k];
       let score = -Infinity;
       let bomb = false;
-      if (g.powerups[k] >= 0) {
+      if (g.powerups[k] >= 0 && g.powerups[k] !== POWER.Curse) {
         score = this.p.greed - d * 0.6;
       }
       if (this.p.hunt > 0 && this.enemyInBlast(g, me, x, y)) {

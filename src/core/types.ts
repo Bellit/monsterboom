@@ -7,6 +7,7 @@ export type Dir = 0 | 1 | 2 | 3 | 4;
 export const DX = [0, 0, 0, -1, 1] as const;
 export const DY = [0, -1, 1, 0, 0] as const;
 export const DIRS: readonly Dir[] = [1, 2, 3, 4];
+export const OPPOSITE: readonly Dir[] = [0, 2, 1, 4, 3];
 
 export const TILE = {
   Empty: 0,
@@ -16,13 +17,35 @@ export const TILE = {
   Burning: 3,
 } as const;
 
+/** Suelo especial de cada casilla (mapas temáticos). */
+export const FLOOR = {
+  Normal: 0,
+  Ice: 1,
+  ConvUp: 2,
+  ConvDown: 3,
+  ConvLeft: 4,
+  ConvRight: 5,
+  Teleport: 6,
+} as const;
+
+/** Dirección en la que empuja una cinta, o 0 si no es cinta. */
+export function conveyorDir(floor: number): Dir {
+  return floor >= FLOOR.ConvUp && floor <= FLOOR.ConvRight ? ((floor - 1) as Dir) : 0;
+}
+
 export const POWER = {
   Bomb: 0,
   Fire: 1,
   Speed: 2,
   Kick: 3,
+  Throw: 4,
+  Shield: 5,
+  Curse: 6,
 } as const;
 export type PowerType = (typeof POWER)[keyof typeof POWER];
+
+export type CurseType = 'slow' | 'fast' | 'reverse' | 'diarrhea' | 'nobomb';
+export const CURSES: readonly CurseType[] = ['slow', 'fast', 'reverse', 'diarrhea', 'nobomb'];
 
 export type Difficulty = 'easy' | 'normal' | 'hard';
 
@@ -45,8 +68,25 @@ export interface Player {
   range: number;
   speedLv: number;
   kick: boolean;
+  throw: boolean;
+  shield: boolean;
+  /** Segundos de invulnerabilidad tras perder el escudo. */
+  invuln: number;
+  curse: CurseType | null;
+  curseTime: number;
   facing: Dir;
   moving: boolean;
+  /** Dirección en la que patina sobre hielo. */
+  iceDir: Dir;
+  /** Teletransporte del que acaba de salir (no vuelve a activarse hasta pisar otra casilla). */
+  tpLock: number;
+}
+
+export interface BombFlight {
+  fromX: number;
+  fromY: number;
+  t: number;
+  dur: number;
 }
 
 export interface Bomb {
@@ -59,16 +99,26 @@ export interface Bomb {
   range: number;
   /** Jugadores que aún están encima y pueden salir de ella. */
   passable: Set<number>;
-  /** Dirección en la que se desliza tras una patada (0 = quieta). */
+  /** Dirección en la que se desliza (patada o cinta). 0 = quieta. */
   slide: Dir;
+  slideSpeed: number;
   /** Avance hacia la siguiente casilla mientras se desliza (0..1). */
   offset: number;
+  /** Bomba lanzada por el aire. */
+  flight: BombFlight | null;
 }
 
 export type GameEvent =
   | { type: 'bomb'; x: number; y: number }
   | { type: 'explode'; x: number; y: number }
-  | { type: 'pickup'; player: number; power: PowerType }
+  | { type: 'pickup'; player: number; power: PowerType; x: number; y: number }
   | { type: 'death'; player: number }
   | { type: 'kick' }
+  | { type: 'throw' }
+  | { type: 'land'; x: number; y: number }
+  | { type: 'shieldBreak'; player: number }
+  | { type: 'curse'; player: number; curse: CurseType }
+  | { type: 'teleport'; player: number; fromX: number; fromY: number; x: number; y: number }
+  | { type: 'countdown'; value: number }
+  | { type: 'go' }
   | { type: 'rainStart' };

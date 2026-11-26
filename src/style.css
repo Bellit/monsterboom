@@ -74,7 +74,22 @@ h2 { margin: 0; font-size: clamp(1.6rem, 5vw, 2.6rem); }
   font-size: 0.9rem;
   color: var(--muted);
 }
-#menu-form button { grid-column: 1 / -1; }
+#menu-form button, #menu-form .wide { grid-column: 1 / -1; }
+.map-desc { font-size: 0.8rem; color: var(--muted); min-height: 1.2em; }
+
+#mute {
+  position: fixed;
+  top: 12px;
+  left: max(12px, env(safe-area-inset-left));
+  z-index: 20;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  font-size: 1.2rem;
+  background: rgb(0 0 0 / 0.45);
+}
+/* Durante la partida solo se ve en la pausa (para no tapar el marcador). */
+body.in-game:not(.paused) #mute { display: none; }
 
 select, button {
   font: inherit;

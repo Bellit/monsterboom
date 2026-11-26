@@ -4,8 +4,34 @@ import { BattleScene, type MatchSettings } from './scenes/BattleScene';
 import { Controls } from './input/controls';
 import { PLAYER_COLORS, PLAYER_NAMES, cssColor } from './theme';
 import type { Difficulty } from './core/types';
+import { MAPS, type MapId } from './core/maps';
+import { sfx } from './audio/sfx';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
+// Selector de mapa (sale de la lista de mapas del juego).
+const mapSelect = $<HTMLSelectElement>('map-select');
+const mapDesc = $('map-desc');
+for (const m of MAPS) mapSelect.add(new Option(m.name, m.id));
+const showMapDesc = () => {
+  mapDesc.textContent = MAPS.find((m) => m.id === mapSelect.value)?.description ?? '';
+};
+mapSelect.addEventListener('change', showMapDesc);
+showMapDesc();
+
+// Botón de sonido.
+const muteBtn = $('mute');
+const paintMute = () => {
+  muteBtn.textContent = sfx.muted ? '🔇' : '🔊';
+  muteBtn.setAttribute('aria-pressed', String(sfx.muted));
+  muteBtn.setAttribute('aria-label', sfx.muted ? 'Activar el sonido' : 'Silenciar el sonido');
+};
+muteBtn.addEventListener('click', () => {
+  sfx.setMuted(!sfx.muted);
+  paintMute();
+  muteBtn.blur();
+});
+paintMute();
 
 const menu = $('menu');
 const pauseScreen = $('pause');
@@ -48,6 +74,8 @@ function startMatch(settings: MatchSettings): void {
   show(resultScreen, false);
   show(pauseScreen, false);
   show(touch, true);
+  document.body.classList.add('in-game');
+  document.body.classList.remove('paused');
   controls.enabled = true;
   const data = {
     settings,
@@ -107,6 +135,7 @@ function toMenu(): void {
   show(resultScreen, false);
   show(pauseScreen, false);
   show(touch, false);
+  document.body.classList.remove('in-game', 'paused');
   show(menu, true);
   $('start').focus();
 }
@@ -117,6 +146,7 @@ function setPaused(on: boolean): void {
   s.paused = on;
   controls.reset();
   show(pauseScreen, on);
+  document.body.classList.toggle('paused', on);
   if (on) $('resume').focus();
 }
 
@@ -130,6 +160,7 @@ $('menu-form').addEventListener('submit', (e) => {
     difficulty: form.get('difficulty') as Difficulty,
     roundsToWin: Number(form.get('rounds')),
     roundTime: Number(form.get('time')),
+    map: form.get('map') as MapId,
   });
 });
 $('resume').addEventListener('click', () => setPaused(false));

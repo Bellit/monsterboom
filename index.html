@@ -44,11 +44,17 @@
             <option value="180">3:00</option>
           </select>
         </label>
+        <label class="wide">Mapa
+          <select name="map" id="map-select"></select>
+          <span id="map-desc" class="map-desc"></span>
+        </label>
         <button id="start" class="primary" type="submit">¡A jugar!</button>
       </form>
       <p class="help keys">Flechas o WASD para moverte · Espacio para poner bomba · Esc para pausar</p>
-      <p class="help">Cuando se acaba el tiempo empieza la lluvia de bombas.</p>
+      <p class="help">Con el guante, pulsa bomba dos veces para lanzarla. La calavera trae una maldición… y se contagia.</p>
     </main>
+
+    <button id="mute" type="button" aria-pressed="false" aria-label="Silenciar el sonido">🔊</button>
 
     <section id="pause" class="screen dim" hidden aria-label="Pausa">
       <h2>Pausa</h2>
