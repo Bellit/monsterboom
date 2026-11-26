@@ -71,7 +71,7 @@ Juego web de acción en cuadrícula con bombas, protagonizado por monstruos. Per
    - ✅ Efectos de sonido sintetizados y botón de silencio
    - ✅ Tests automáticos de la lógica (`npm test`)
    - ✅ Elegir monstruo en el menú (se recuerda entre visitas)
-   - ✅ Música chiptune propia generada por código: tema de menú y de batalla (se acelera con la lluvia); botones separados de música y efectos
+   - ✅ Música chiptune propia generada por código (`src/audio/songs.ts`): menú, batalla, un tema por mundo (Cripta, Lago helado, Fábrica, Portales), jefe, y melodías de nivel superado, mundo completado y fin de partida. Se acelera con la lluvia y los cazadores. Botones separados de música y efectos
    - Pendiente: IA que use portales y escudo con cabeza
 3. **Modo historia** ← *primera versión jugable*
    - ✅ 4 mundos × 5 niveles definidos como datos en `src/core/story.ts` (Cripta, Lago helado, Fábrica, Portales)

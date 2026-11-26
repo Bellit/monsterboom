@@ -178,8 +178,12 @@ export class BattleScene extends Phaser.Scene {
     } else if (settings.map === 'random') this.floatText(W / 2, HUD + 40, `Mapa: ${MAPS.find((m) => m.id === mapName)?.name ?? mapName}`, '#ffffff', 20, 2200);
     this.bigText('3');
     sfx.countdown(false);
-    music.play('battle');
-    music.setTempo(story && levelAt(story.pos)?.boss ? 1.12 : 1);
+    // Música: la del jefe, la del mundo o la del mapa de batalla.
+    const theme = this.match.mapId === 'custom' ? 'classic' : this.match.mapId;
+    if (story && levelAt(story.pos)?.boss) music.play('boss');
+    else if (theme === 'classic') music.play(story ? 'crypt' : 'battle');
+    else music.play(theme);
+    music.setTempo(1);
   }
 
   update(_t: number, deltaMs: number): void {
@@ -206,7 +210,6 @@ export class BattleScene extends Phaser.Scene {
     if (this.match.phase === 'over' && !this.roundHandled && this.data_.story) {
       this.roundHandled = true;
       const result = this.match.result ?? 'dead';
-      if (result === 'clear') sfx.win();
       this.data_.hooks.onStoryOver?.(result, this.data_.story.score + this.match.score, this.match.statsOf());
     } else if (this.match.phase === 'over' && !this.roundHandled) {
       this.roundHandled = true;
@@ -304,6 +307,7 @@ export class BattleScene extends Phaser.Scene {
         break;
       case 'clear':
         this.bigText('¡NIVEL SUPERADO!', '#7dff9a', 44);
+        music.jingle(this.data_.story && levelAt(this.data_.story.pos)?.boss ? 'worldClear' : 'clear');
         break;
       case 'hunters':
         this.bigText('¡VIENEN LOS CAZADORES!', '#ff6a6a', 36);

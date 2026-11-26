@@ -106,7 +106,7 @@ const phaser = new Phaser.Game({
 
 phaser.scene.add('battle', BattleScene, false);
 // En desarrollo, acceso desde la consola para depurar.
-if (import.meta.env.DEV) Object.assign(window, { phaser });
+if (import.meta.env.DEV) Object.assign(window, { phaser, music, audio });
 
 let current: MatchSettings | null = null;
 
@@ -166,7 +166,7 @@ function onStoryOver(result: 'clear' | 'dead', score: number, stats: PlayerStats
       run = null;
       endScreen('¡Has terminado Boom Monsters!', `Puntuación final: ${score}`, [
         button('Menú', toMenu, true),
-      ]);
+      ], 'worldClear');
       return;
     }
     const nr: StoryRun = { ...r, pos: next, score, stats };
@@ -175,7 +175,7 @@ function onStoryOver(result: 'clear' | 'dead', score: number, stats: PlayerStats
     resultTitle.textContent = wasBoss ? `¡${worldName(r.pos.world)} completado!` : '¡Nivel superado!';
     resultText.textContent = `★ ${score} · Siguiente: ${worldName(next.world)} ${levelLabel(next)}`;
     show(resultScreen, true);
-    storyTimer = window.setTimeout(() => playLevel(nr), wasBoss ? 3200 : 2400);
+    storyTimer = window.setTimeout(() => playLevel(nr), wasBoss ? 5200 : 2600);
     return;
   }
 
@@ -199,13 +199,13 @@ function onStoryOver(result: 'clear' | 'dead', score: number, stats: PlayerStats
   endScreen('Fin de la partida', `Vuelves al principio de ${worldName(r.pos.world)} con ${START_LIVES} vidas.`, [
     button('Reintentar', () => playLevel({ ...nr, skin }), true),
     button('Menú', toMenu),
-  ]);
+  ], 'gameOver');
 }
 
-function endScreen(title: string, text: string, actions: HTMLButtonElement[]): void {
+function endScreen(title: string, text: string, actions: HTMLButtonElement[], jingle: 'worldClear' | 'gameOver'): void {
   controls.enabled = false;
   show(touch, false);
-  music.play('menu');
+  music.jingle(jingle, 'menu');
   resultTitle.textContent = title;
   resultText.textContent = text;
   resultActions.replaceChildren(...actions);
@@ -277,7 +277,7 @@ function onRoundOver(winner: number, wins: number[], settings: MatchSettings, ne
     show(touch, false);
     resultTitle.textContent = champion === 0 ? '¡Has ganado la partida!' : `${name(champion)} gana la partida`;
     resultText.textContent = scoreLine(wins, name);
-    music.play('menu');
+    music.jingle(champion === 0 ? 'worldClear' : 'gameOver', 'menu');
     resultActions.append(
       button('Revancha', () => current && startMatch(current), true),
       button('Menú', toMenu),
