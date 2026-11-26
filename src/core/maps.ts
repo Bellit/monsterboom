@@ -10,7 +10,7 @@ export interface MapInfo {
 
 export const MAPS: readonly MapInfo[] = [
   { id: 'classic', name: 'Cripta clásica', description: 'Sin sorpresas: bloques, bombas y nada más.' },
-  { id: 'portals', name: 'Portales', description: 'Pisa un portal y apareces en otro al azar.' },
+  { id: 'portals', name: 'Portales', description: 'Cada portal lleva a su pareja del mismo color. El fuego y las bombas también los cruzan.' },
   { id: 'factory', name: 'Fábrica', description: 'Cintas transportadoras que te arrastran (y a las bombas).' },
   { id: 'ice', name: 'Lago helado', description: 'En el hielo patinas hasta chocar con algo.' },
   { id: 'random', name: 'Al azar', description: 'Un mapa distinto cada ronda.' },
@@ -23,6 +23,8 @@ export interface MapLayout {
   tiles: Uint8Array;
   floor: Uint8Array;
   spawns: [number, number][];
+  /** Parejas de portales (índices de casilla): cada portal lleva a su pareja. */
+  portals: [number, number][];
 }
 
 const SOLID = 1;
@@ -33,6 +35,7 @@ const SOFT = 2;
  *   #  muro      +  bloque rompible   .  vacío
  *   0-7  salida de cada jugador
  *   T  portal    ~  hielo    ^ v < >  cintas
+ * Los portales se emparejan en orden de lectura: el 1.º con el 2.º, el 3.º con el 4.º…
  */
 export function parseLayout(rows: string[]): MapLayout {
   const h = rows.length;
@@ -54,7 +57,11 @@ export function parseLayout(rows: string[]): MapLayout {
       else if (ch === '>') floor[k] = FLOOR.ConvRight;
     });
   });
-  return { w, h, tiles, floor, spawns: spawns.filter(Boolean) };
+  const pads: number[] = [];
+  for (let k = 0; k < floor.length; k++) if (floor[k] === FLOOR.Teleport) pads.push(k);
+  const portals: [number, number][] = [];
+  for (let i = 0; i + 1 < pads.length; i += 2) portals.push([pads[i], pads[i + 1]]);
+  return { w, h, tiles, floor, spawns: spawns.filter(Boolean), portals };
 }
 
 /** Genera un mapa procedural del tipo pedido para n jugadores. */
@@ -65,11 +72,20 @@ export function generateMap(id: Exclude<MapId, 'random'>, players: number, rand:
   const at = (x: number, y: number) => y * w + x;
 
   // Suelo especial según el tema.
+  const portals: [number, number][] = [];
   if (id === 'portals') {
-    const cx = (w - 1) / 2;
-    const cy = (h - 1) / 2;
-    const pads: [number, number][] = [[3, 3], [w - 4, 3], [3, h - 4], [w - 4, h - 4], [cx % 2 ? cx : cx - 1, cy % 2 ? cy : cy - 1]];
-    for (const [x, y] of pads) floor[at(x, y)] = FLOOR.Teleport;
+    // Tres parejas: las dos diagonales y una vertical por el centro.
+    const cx = Math.floor(w / 2) % 2 === 1 ? Math.floor(w / 2) : Math.floor(w / 2) - 1;
+    const pairs: [[number, number], [number, number]][] = [
+      [[3, 3], [w - 4, h - 4]],
+      [[w - 4, 3], [3, h - 4]],
+      [[cx, 3], [cx, h - 4]],
+    ];
+    for (const [[ax, ay], [bx, by]] of pairs) {
+      floor[at(ax, ay)] = FLOOR.Teleport;
+      floor[at(bx, by)] = FLOOR.Teleport;
+      portals.push([at(ax, ay), at(bx, by)]);
+    }
   } else if (id === 'factory') {
     // Dos cintas horizontales en sentidos opuestos y dos verticales.
     const r1 = 3;
@@ -113,7 +129,7 @@ export function generateMap(id: Exclude<MapId, 'random'>, players: number, rand:
       if (tiles[k] === SOFT) tiles[k] = 0;
     }
   }
-  return { w, h, tiles, floor, spawns };
+  return { w, h, tiles, floor, spawns, portals };
 }
 
 function spawnPoints(w: number, h: number): [number, number][] {

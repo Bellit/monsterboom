@@ -123,6 +123,8 @@ export type GameEvent =
   | { type: 'go' }
   | { type: 'rainStart' }
   | { type: 'freeze'; x: number; y: number }
+  | { type: 'portalFire'; fromX: number; fromY: number; x: number; y: number }
+  | { type: 'portalBomb'; fromX: number; fromY: number; x: number; y: number }
   // Modo historia
   | { type: 'enemyDeath'; x: number; y: number; points: number; boss: boolean }
   | { type: 'bossHit'; x: number; y: number; hp: number }

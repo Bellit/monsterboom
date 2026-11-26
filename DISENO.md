@@ -39,7 +39,7 @@ Juego web de acción en cuadrícula con bombas, protagonizado por monstruos. Per
 - Partida **por rondas** (al mejor de 3 o 5, configurable). Gana la ronda el último en pie.
 - Al acabarse el tiempo de la ronda: **lluvia de bombas** al azar por el mapa.
 - IA con **3 niveles de dificultad** (fácil, normal, difícil), elegible por rival.
-- **Varios mapas** con elementos especiales a juego con los monstruos (teletransportes, cintas, hielo, lápidas…), además de uno clásico.
+- **Varios mapas** con elementos especiales a juego con los monstruos (portales por parejas, cintas, hielo, lápidas…), además de uno clásico.
 
 ## Modo historia
 - **4 mundos × 5 niveles** (20 niveles), preparado para **añadir más mundos y niveles** fácilmente (niveles definidos como datos, no como código).
@@ -68,6 +68,8 @@ Juego web de acción en cuadrícula con bombas, protagonizado por monstruos. Per
    - ✅ Power-ups: patear, lanzar (pulsar bomba dos veces), escudo y 5 maldiciones contagiosas (lento, acelerado, controles al revés, bombas sin control, sin bombas)
    - ✅ Mapas: Cripta clásica, Portales, Fábrica (cintas), Lago helado y «al azar»
    - ✅ Cada mundo con aspecto propio (`src/render/themes.ts`): Cripta (lápidas), Lago helado (nieve, rocas nevadas, cubos de hielo), Fábrica (chapa, maquinaria, cajas), Portales (obsidiana y cristales)
+   - ✅ Portales por parejas de colores: cada portal lleva siempre al mismo. El fuego y las bombas (pateadas, lanzadas) también los atraviesan; la IA lo tiene en cuenta
+   - ✅ Cripta (modo historia): niebla nocturna; solo ves alrededor de tu monstruo, las llamas, las bombas y el brillo de los enemigos
    - ✅ Lago helado: el hielo hace patinar (esquirlas y sonido al deslizarse) y los cubos de hielo rotos dejan suelo helado, así que el mapa resbala cada vez más
    - ✅ Cuenta atrás, lluvia de bombas, partículas, textos flotantes
    - ✅ Efectos de sonido sintetizados y botón de silencio

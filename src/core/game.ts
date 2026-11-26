@@ -75,6 +75,10 @@ export class Game {
   readonly floor: Uint8Array;
   /** Casillas con portal. */
   readonly teleports: number[] = [];
+  /** Cada portal lleva a su pareja. */
+  readonly portalPair = new Map<number, number>();
+  /** Número de pareja de cada portal (para pintarlas de colores). */
+  readonly portalGroup = new Map<number, number>();
   /** -1 = sin power-up */
   readonly powerups: Int8Array;
   /** Tiempo restante de llama en cada casilla. */
@@ -145,6 +149,12 @@ export class Game {
     this.phase = this.startTimer > 0 ? 'starting' : 'playing';
     this.powerChance = cfg.powerChance ?? (cfg.story ? STORY_POWER_CHANCE : POWER_CHANCE);
     for (let k = 0; k < n; k++) if (this.floor[k] === FLOOR.Teleport) this.teleports.push(k);
+    layout.portals.forEach(([a, b], i) => {
+      this.portalPair.set(a, b);
+      this.portalPair.set(b, a);
+      this.portalGroup.set(a, i);
+      this.portalGroup.set(b, i);
+    });
 
     layout.spawns.slice(0, cfg.players).forEach(([x, y], id) => {
       this.players.push({
@@ -454,9 +464,8 @@ export class Game {
     }
     if (k !== p.tpLock) p.tpLock = -1;
     if (!teleports || this.floor[k] !== FLOOR.Teleport || p.tpLock === k) return;
-    const targets = this.teleports.filter((t) => t !== k && !this.bombAt(t % this.w, Math.floor(t / this.w)));
-    if (targets.length === 0) return;
-    const dest = targets[this.rng.int(targets.length)];
+    const dest = this.portalPair.get(k);
+    if (dest === undefined || this.bombAt(dest % this.w, Math.floor(dest / this.w))) return;
     p.x = dest % this.w;
     p.y = Math.floor(dest / this.w);
     p.tpLock = dest;
@@ -616,6 +625,7 @@ export class Game {
         b.flight.t += dt;
         if (b.flight.t >= b.flight.dur) {
           b.flight = null;
+          this.bombThroughPortal(b);
           for (const q of this.players) {
             if (q.alive && Math.round(q.x) === b.tx && Math.round(q.y) === b.ty) b.passable.add(q.id);
           }
@@ -654,6 +664,8 @@ export class Game {
             b.ty = ny;
             b.offset = 0;
             b.passable.clear();
+            // Entra en un portal: sale por su pareja y sigue en la misma dirección.
+            this.bombThroughPortal(b);
             // Al salir de una cinta (o cambiar de sentido) deja de arrastrarse.
             if (b.slideSpeed === CONVEYOR_SPEED) {
               const conv = conveyorDir(this.floor[this.idx(nx, ny)]);
@@ -678,44 +690,94 @@ export class Game {
     }
   }
 
-  private explode(b: Bomb): void {
-    this.bombs = this.bombs.filter((o) => o !== b);
-    this.events.push({ type: 'explode', x: b.tx, y: b.ty });
-    this.addFlame(b.tx, b.ty, 4);
+  /**
+   * Recorre las casillas que alcanza una explosión en (x, y). Es la única fuente
+   * de verdad: la usan la explosión real y la IA para prever el peligro.
+   * Las llamas se paran en muros y en lo primero que encuentran (bloque, bomba,
+   * power-up). Si entran en un portal, salen por su pareja (una vez por rayo).
+   */
+  forEachBlast(
+    x: number, y: number, range: number,
+    visit: (k: number, mask: number, what: 'empty' | 'soft' | 'bomb' | 'powerup') => void,
+    onPortal?: (from: number, to: number) => void,
+  ): void {
+    visit(this.idx(x, y), 4, 'empty');
     for (const d of DIRS) {
       const mask = d >= 3 ? 1 : 2;
-      for (let i = 1; i <= b.range; i++) {
-        const x = b.tx + DX[d] * i;
-        const y = b.ty + DY[d] * i;
-        if (!this.inBounds(x, y)) break;
-        const k = this.idx(x, y);
-        const t = this.tiles[k];
-        if (t === TILE.Solid || t === TILE.Burning) break;
-        if (t === TILE.Soft) {
-          this.tiles[k] = TILE.Burning;
-          this.burning.set(k, BURN_TIME);
-          break;
-        }
-        const other = this.bombAt(x, y);
-        if (other && !other.flight) {
-          other.fuse = 0; // reacción en cadena
-          this.addFlame(x, y, mask);
-          break;
-        }
-        if (this.powerups[k] >= 0) {
-          this.powerups[k] = -1;
-          this.addFlame(x, y, mask);
-          break;
-        }
-        this.addFlame(x, y, mask);
+      let cx = x;
+      let cy = y;
+      let jumped = false;
+      for (let i = 1; i <= range; i++) {
+        cx += DX[d];
+        cy += DY[d];
+        if (!this.inBounds(cx, cy)) break;
+        const what = this.blastHit(cx, cy);
+        if (what === 'stop') break;
+        visit(this.idx(cx, cy), mask, what);
+        if (what !== 'empty') break;
+        const k = this.idx(cx, cy);
+        const pair = this.portalPair.get(k);
+        if (pair === undefined || jumped) continue;
+        // El fuego atraviesa el portal y sale por su pareja.
+        jumped = true;
+        onPortal?.(k, pair);
+        cx = pair % this.w;
+        cy = Math.floor(pair / this.w);
+        const out = this.blastHit(cx, cy);
+        if (out === 'stop') break;
+        visit(pair, mask, out);
+        if (out !== 'empty') break;
       }
     }
   }
 
-  private addFlame(x: number, y: number, mask: number): void {
+  private blastHit(x: number, y: number): 'stop' | 'empty' | 'soft' | 'bomb' | 'powerup' {
     const k = this.idx(x, y);
-    this.flames[k] = FLAME_TIME;
-    this.flameMask[k] |= mask;
+    const t = this.tiles[k];
+    if (t === TILE.Solid || t === TILE.Burning) return 'stop';
+    if (t === TILE.Soft) return 'soft';
+    const b = this.bombAt(x, y);
+    if (b && !b.flight) return 'bomb';
+    if (this.powerups[k] >= 0) return 'powerup';
+    return 'empty';
+  }
+
+  private explode(b: Bomb): void {
+    this.bombs = this.bombs.filter((o) => o !== b);
+    this.events.push({ type: 'explode', x: b.tx, y: b.ty });
+    this.forEachBlast(b.tx, b.ty, b.range, (k, mask, what) => {
+      if (what === 'soft') {
+        this.tiles[k] = TILE.Burning;
+        this.burning.set(k, BURN_TIME);
+        return;
+      }
+      if (what === 'bomb') {
+        const other = this.bombAt(k % this.w, Math.floor(k / this.w));
+        if (other) other.fuse = 0; // reacción en cadena
+      }
+      if (what === 'powerup') this.powerups[k] = -1;
+      this.flames[k] = FLAME_TIME;
+      this.flameMask[k] |= mask;
+    }, (from, to) => {
+      this.events.push({
+        type: 'portalFire',
+        fromX: from % this.w, fromY: Math.floor(from / this.w),
+        x: to % this.w, y: Math.floor(to / this.w),
+      });
+    });
+  }
+
+  /** Si la bomba ha entrado en un portal, sale por su pareja (si está libre). */
+  private bombThroughPortal(b: Bomb): boolean {
+    const pair = this.portalPair.get(this.idx(b.tx, b.ty));
+    if (pair === undefined) return false;
+    const px = pair % this.w;
+    const py = Math.floor(pair / this.w);
+    if (this.blockedForBomb(px, py)) return false;
+    this.events.push({ type: 'portalBomb', fromX: b.tx, fromY: b.ty, x: px, y: py });
+    b.tx = px;
+    b.ty = py;
+    return true;
   }
 
   private updateFlames(dt: number): void {

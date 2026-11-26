@@ -88,6 +88,8 @@ const C = {
   curse: 0xb04dff,
 };
 
+/** Color de cada pareja de portales. */
+const PORTAL_COLORS = [0xa66bff, 0x2fd0e8, 0xff9a3c];
 const POWER_COLORS = [0x3c3c78, 0xb8321f, 0x2b6bd9, 0x2f9a4a, 0x0f8f8f, 0x2a7fbf, 0x2b1b3a];
 const POWER_LABELS = ['+1 bomba', '+fuego', '+velocidad', 'patada', 'lanzar', 'escudo', 'maldición'];
 const CURSE_LABELS: Record<CurseType, string> = {
@@ -119,6 +121,9 @@ export class BattleScene extends Phaser.Scene {
   private seenBurning = new Set<number>();
   /** Si el jugador 0 iba patinando en el paso anterior (para el sonido). */
   private wasSliding = false;
+  /** Niebla nocturna de la Cripta (solo en el modo historia). */
+  private fog: Phaser.GameObjects.RenderTexture | null = null;
+  private light!: Phaser.GameObjects.Image;
   private painter!: Painter;
   private shake = 0;
   private roundHandled = false;
@@ -166,6 +171,7 @@ export class BattleScene extends Phaser.Scene {
     this.gStatic = this.add.graphics();
     this.gDyn = this.add.graphics();
     this.gFx = this.add.graphics();
+    this.setupFog(W, H);
     this.gHud = this.add.graphics();
     this.painter = phaserPainter(this.gDyn);
     this.drawStatic();
@@ -215,6 +221,7 @@ export class BattleScene extends Phaser.Scene {
 
     this.drawDynamic();
     this.drawFx();
+    this.drawFog();
     this.drawHud();
 
     if (this.match.phase === 'over' && !this.roundHandled && this.data_.story) {
@@ -282,6 +289,15 @@ export class BattleScene extends Phaser.Scene {
         sfx.shield();
         break;
       }
+      case 'portalFire':
+        this.burst(px(e.x), py(e.y), [C.flameIn, C.flameOut, C.portalGlow], 16, 220, 0.5);
+        sfx.teleport();
+        break;
+      case 'portalBomb':
+        this.burst(px(e.fromX), py(e.fromY), [C.portalGlow, 0xffffff], 8, 120, 0.4);
+        this.burst(px(e.x), py(e.y), [C.portalGlow, 0xffffff], 12, 160, 0.4);
+        sfx.teleport();
+        break;
       case 'teleport':
         this.burst(px(e.fromX), py(e.fromY), [C.portalGlow, C.portal], 10, 140, 0.4);
         this.burst(px(e.x), py(e.y), [C.portalGlow, 0xffffff], 14, 160, 0.5);
@@ -431,8 +447,9 @@ export class BattleScene extends Phaser.Scene {
           this.theme.floor(g, px, py, x, y, T);
         }
         if (f === FLOOR.Teleport) {
-          g.fillStyle(0x1b0f33).fillEllipse(px + T / 2, py + T / 2, T * 0.85, T * 0.7);
-          g.lineStyle(3, C.portal).strokeEllipse(px + T / 2, py + T / 2, T * 0.85, T * 0.7);
+          const col = PORTAL_COLORS[(game.portalGroup.get(k) ?? 0) % PORTAL_COLORS.length];
+          g.fillStyle(0x0d0820).fillEllipse(px + T / 2, py + T / 2, T * 0.85, T * 0.7);
+          g.lineStyle(4, col).strokeEllipse(px + T / 2, py + T / 2, T * 0.85, T * 0.7);
         }
         // sombra de la pared de arriba
         if (y > 0 && game.tiles[game.idx(x, y - 1)] === TILE.Solid && f !== FLOOR.Ice) {
@@ -451,6 +468,7 @@ export class BattleScene extends Phaser.Scene {
     this.gStatic.setPosition(sx, sy);
     g.setPosition(sx, sy);
     this.gFx.setPosition(sx, sy);
+    this.fog?.setPosition(sx, HUD + sy);
 
     for (let y = 0; y < game.h; y++) {
       for (let x = 0; x < game.w; x++) {
@@ -464,7 +482,8 @@ export class BattleScene extends Phaser.Scene {
         if (conv && t === TILE.Empty) this.drawBeltArrows(g, px, py, conv);
         if (f === FLOOR.Teleport) {
           const pulse = 0.5 + 0.5 * Math.sin(this.time_ * 4 + k);
-          g.fillStyle(C.portalGlow, 0.25 + pulse * 0.35).fillEllipse(px + T / 2, py + T / 2, T * 0.55 * (0.8 + pulse * 0.2), T * 0.42);
+          const col = PORTAL_COLORS[(game.portalGroup.get(k) ?? 0) % PORTAL_COLORS.length];
+          g.fillStyle(col, 0.25 + pulse * 0.35).fillEllipse(px + T / 2, py + T / 2, T * 0.55 * (0.8 + pulse * 0.2), T * 0.42);
         }
         if (k === game.door && t === TILE.Empty) this.drawDoor(g, px, py, game.doorOpen);
         if (t === TILE.Soft) {
@@ -658,6 +677,51 @@ export class BattleScene extends Phaser.Scene {
     if (id === 0 && p.alive) {
       const ay = cy - r * 1.45 + Math.sin(this.time_ * 6) * 2;
       g.fillStyle(0xffffff).fillTriangle(cx - 6, ay - 6, cx + 6, ay - 6, cx, ay + 2);
+    }
+  }
+
+  private setupFog(W: number, H: number): void {
+    this.fog = null;
+    if (!this.data_.story || this.match.mapId !== 'classic') return;
+    if (!this.textures.exists('light')) {
+      // Círculo de luz con borde suave.
+      const size = 256;
+      const tex = this.textures.createCanvas('light', size, size);
+      const ctx = tex?.getContext();
+      if (!tex || !ctx) return;
+      const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+      grad.addColorStop(0, 'rgba(255,255,255,1)');
+      grad.addColorStop(0.55, 'rgba(255,255,255,0.85)');
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, size, size);
+      tex.refresh();
+    }
+    this.fog = this.add.renderTexture(0, HUD, W, H - HUD).setOrigin(0, 0).setDepth(10);
+    this.light = this.make.image({ key: 'light', add: false });
+  }
+
+  /** Oscuridad con huecos de luz: tu monstruo, las llamas, las bombas y la puerta. */
+  private drawFog(): void {
+    const fog = this.fog;
+    if (!fog) return;
+    const game = this.match;
+    fog.clear();
+    fog.fill(0x06040c, 0.9);
+    const glow = (x: number, y: number, radius: number) => {
+      this.light.setPosition(x * T + T / 2, y * T + T / 2).setScale((radius * 2 * T) / 256);
+      fog.erase(this.light);
+    };
+    const me = game.players[0];
+    const flicker = 1 + Math.sin(this.time_ * 7) * 0.03;
+    glow(me.x, me.y, (me.alive ? 3.4 : 4.5) * flicker);
+    for (let k = 0; k < game.flames.length; k++) {
+      if (game.flames[k] > 0) glow(k % game.w, Math.floor(k / game.w), 1.4);
+    }
+    for (const b of game.bombs) glow(b.tx, b.ty, 0.9);
+    for (const e of game.enemies) if (e.alive) glow(e.x, e.y, e.boss ? 1.1 : 0.55);
+    if (game.door >= 0 && game.doorOpen && game.tiles[game.door] === TILE.Empty) {
+      glow(game.door % game.w, Math.floor(game.door / game.w), 1.6);
     }
   }
 

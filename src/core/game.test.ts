@@ -190,6 +190,66 @@ describe('suelos especiales', () => {
     expect(Math.round(g.players[0].x)).toBeGreaterThanOrEqual(6);
   });
 
+  it('cada portal lleva siempre a su pareja', () => {
+    const g = make([
+      '###########',
+      '#0T.....T.#',
+      '#.#######.#',
+      '#.T.....T1#',
+      '###########',
+    ]);
+    // Parejas en orden de lectura: (2,1)↔(8,1) y (2,3)↔(8,3).
+    let dest: { x: number; y: number } | null = null;
+    for (let i = 0; i < 60 && !dest; i++) {
+      g.step([{ dir: 4, bomb: false }]);
+      const e = g.events.find((ev) => ev.type === 'teleport');
+      if (e && e.type === 'teleport') dest = { x: e.x, y: e.y };
+      g.events.length = 0;
+    }
+    expect(dest).toEqual({ x: 8, y: 1 });
+  });
+
+  it('el fuego entra por un portal y sale por su pareja', () => {
+    const g = make([
+      '###########',
+      '#0.T######',
+      '##########',
+      '#......T.#',
+      '#1########',
+      '###########',
+    ].map((r) => r.padEnd(11, '#')));
+    // Bomba en (1,1) con alcance 3: el rayo hacia la derecha llega a (3,1), el portal.
+    g.players[0].range = 3;
+    run(g, STEP, 0, true);
+    g.players[0].x = 1; // se queda: da igual, solo miramos las llamas
+    run(g, FUSE + 0.05);
+    // Sale por (7,3) y sigue hacia la derecha: (8,3) también arde.
+    expect(g.flames[g.idx(7, 3)]).toBeGreaterThan(0);
+    expect(g.flames[g.idx(8, 3)]).toBeGreaterThan(0);
+    expect(g.flames[g.idx(6, 3)]).toBe(0);
+  });
+
+  it('una bomba pateada que entra en un portal sale por su pareja', () => {
+    const g = make([
+      '###########',
+      '#0...T####',
+      '##########',
+      '#T.......#',
+      '#1########',
+      '###########',
+    ].map((r) => r.padEnd(11, '#')));
+    const p = g.players[0];
+    p.kick = true;
+    run(g, 0.3, 4); // a (2,1)
+    run(g, STEP, 0, true); // bomba en (2,1)
+    run(g, 0.3, 3); // volver a (1,1)
+    run(g, 0.6, 4); // patear hacia la derecha
+    run(g, 1.5);
+    const b = g.bombs[0];
+    expect(b.ty).toBe(3);
+    expect(b.tx).toBeGreaterThan(1); // salió por (1,3) y siguió deslizándose a la derecha
+  });
+
   it('las cintas arrastran al jugador', () => {
     const g = make([
       '#########',

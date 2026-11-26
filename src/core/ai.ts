@@ -22,21 +22,13 @@ const PARAMS: Record<Difficulty, AiParams> = {
   hard: { reaction: 0, rethink: 0.3, bombProb: 1, hunt: 1.4, greed: 12, margin: 0.3 },
 };
 
-/** Casillas que alcanzaría una explosión en (x, y), con las mismas reglas que el juego. */
+/**
+ * Casillas que alcanzaría una explosión en (x, y). Usa la misma función que el
+ * juego, así que también prevé el fuego que sale por los portales.
+ */
 export function blastTiles(g: Game, x: number, y: number, range: number): number[] {
-  const out = [g.idx(x, y)];
-  for (const d of DIRS) {
-    for (let i = 1; i <= range; i++) {
-      const nx = x + DX[d] * i;
-      const ny = y + DY[d] * i;
-      if (!g.inBounds(nx, ny)) break;
-      const k = g.idx(nx, ny);
-      const t = g.tiles[k];
-      if (t === TILE.Solid || t === TILE.Burning) break;
-      out.push(k);
-      if (t === TILE.Soft || g.bombAt(nx, ny) || g.powerups[k] >= 0) break;
-    }
-  }
+  const out: number[] = [];
+  g.forEachBlast(x, y, range, (k) => out.push(k));
   return out;
 }
 
