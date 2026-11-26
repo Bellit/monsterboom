@@ -18,6 +18,7 @@ export class Controls {
   private bombQueued = false;
   enabled = false;
   onPause: () => void = () => {};
+  onFullscreen: () => void = () => {};
 
   constructor() {
     window.addEventListener('keydown', (e) => {
@@ -32,6 +33,9 @@ export class Controls {
       } else if (e.code === 'Escape' || e.code === 'KeyP') {
         e.preventDefault();
         this.onPause();
+      } else if (e.code === 'KeyF') {
+        e.preventDefault();
+        this.onFullscreen();
       }
     });
     window.addEventListener('keyup', (e) => {

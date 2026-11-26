@@ -87,7 +87,7 @@
         <button id="start" class="primary" type="submit">¡A jugar!</button>
         </div>
       </form>
-      <p class="help keys">Flechas o WASD para moverte · Espacio para poner bomba · Esc para pausar</p>
+      <p class="help keys">Flechas o WASD para moverte · Espacio para poner bomba · Esc para pausar · F pantalla completa</p>
       <p class="help">Con el guante, pulsa bomba dos veces para lanzarla. La calavera trae una maldición… y se contagia.</p>
     </main>
 
@@ -113,7 +113,11 @@
     <div id="touch" hidden>
       <div id="touch-pad" aria-label="Mover"><div id="touch-knob"></div></div>
       <button id="touch-bomb" type="button" aria-label="Poner bomba">💣</button>
-      <button id="touch-pause" type="button" aria-label="Pausa">❚❚</button>
+      <div id="touch-top">
+        <button id="touch-view" type="button" aria-label="Ver el mapa completo">🗺️</button>
+        <button id="touch-full" type="button" aria-label="Pantalla completa">⛶</button>
+        <button id="touch-pause" type="button" aria-label="Pausa">❚❚</button>
+      </div>
     </div>
 
     <div id="rotate" aria-hidden="true">Gira el móvil para jugar en horizontal ↻</div>

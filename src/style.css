@@ -270,16 +270,23 @@ button:hover { filter: brightness(1.1); }
   border: 2px solid rgb(255 255 255 / 0.35);
   z-index: 5;
 }
-#touch-pause {
+/* Botones de arriba a la derecha (vista, pantalla completa, pausa), en el lateral derecho. */
+#touch-top {
   position: fixed;
-  right: max(12px, env(safe-area-inset-right));
-  top: 12px;
+  right: max(10px, env(safe-area-inset-right));
+  top: 10px;
+  display: flex;
+  gap: 6px;
+  z-index: 5;
+}
+#touch-top button {
   width: 44px;
   height: 44px;
   padding: 0;
-  background: rgb(0 0 0 / 0.4);
-  z-index: 5;
+  font-size: 1.1rem;
+  background: rgb(255 255 255 / 0.08);
 }
+#touch-top button[hidden] { display: none; }
 
 #rotate {
   display: none;

@@ -58,8 +58,21 @@ interface Particle {
   gravity: number;
 }
 
-const T = 48; // píxeles por casilla
+const T = 48; // píxeles por casilla (en el mundo; la cámara lo escala)
+/** Desplazamiento vertical del mapa en el mundo (histórico: antes el marcador iba ahí). */
 const HUD = 56;
+/** Alto del marcador superior en ordenador (px CSS). */
+const TOP_HUD = 56;
+/** Ancho de cada lateral en móvil (px CSS): caben el joystick y el botón de bomba. */
+const SIDE_GUTTER = 176;
+/** Filas de casillas que se ven en la vista cercana del móvil. */
+const CLOSE_ROWS = 7.5;
+const VIEW_KEY = 'boom-monsters:view';
+
+/** Pantalla táctil (móvil o tableta). */
+export function isTouch(): boolean {
+  return window.matchMedia('(pointer: coarse)').matches;
+}
 
 const C = {
   bg: 0x1a1726,
@@ -125,6 +138,23 @@ export class BattleScene extends Phaser.Scene {
   private fog: Phaser.GameObjects.RenderTexture | null = null;
   private light!: Phaser.GameObjects.Image;
   private painter!: Painter;
+  /** El mapa se dibuja en una capa y el marcador en otra, cada una con su cámara. */
+  private worldLayer!: Phaser.GameObjects.Layer;
+  private uiLayer!: Phaser.GameObjects.Layer;
+  private uiCam!: Phaser.Cameras.Scene2D.Camera;
+  /** Píxeles de pantalla por píxel CSS (para que el marcador tenga el mismo tamaño en todas partes). */
+  private u = 1;
+  /** Móvil: marcador y mandos en los laterales en vez de arriba. */
+  private side = false;
+  private gutter = 0;
+  /** Zona de la pantalla donde se ve el mapa. */
+  private area = { x: 0, y: 0, w: 1, h: 1 };
+  /** Vista cercana que sigue al monstruo (móvil). */
+  private closeView = true;
+  private following = false;
+  private camX = 0;
+  private camY = 0;
+  private onResize = () => this.applyLayout();
   private shake = 0;
   private roundHandled = false;
   paused = false;
@@ -162,35 +192,45 @@ export class BattleScene extends Phaser.Scene {
     this.bots = this.match.players.slice(1).map((p) => new BotBrain(p.id, settings.difficulty));
     this.data_.hooks.controls.reset();
 
-    const W = this.match.w * T;
-    const H = this.match.h * T + HUD;
-    this.scale.setGameSize(W, H);
+    const mapW = this.match.w * T;
+    const mapH = this.match.h * T;
     this.theme = THEMES[this.match.mapId === 'custom' ? 'classic' : this.match.mapId];
-    this.cameras.main.setBackgroundColor(this.theme.bg);
 
-    this.gStatic = this.add.graphics();
-    this.gDyn = this.add.graphics();
-    this.gFx = this.add.graphics();
-    this.setupFog(W, H);
-    this.gHud = this.add.graphics();
+    this.worldLayer = this.add.layer();
+    this.uiLayer = this.add.layer();
+    this.gStatic = this.world(this.add.graphics());
+    this.gDyn = this.world(this.add.graphics());
+    this.gFx = this.world(this.add.graphics());
+    this.setupFog(mapW, mapH + HUD);
+    this.gHud = this.ui(this.add.graphics());
     this.painter = phaserPainter(this.gDyn);
     this.drawStatic();
 
     const font = { fontFamily: 'system-ui, sans-serif', fontStyle: 'bold' };
-    this.timerText = this.add.text(W / 2, 22, '', { ...font, fontSize: '24px', color: '#ffffff' }).setOrigin(0.5);
-    this.roundText = this.add.text(W / 2, 45, '', { ...font, fontSize: '11px', color: '#b9b3d6' }).setOrigin(0.5);
-    this.statsText = this.add.text(W - 12, HUD / 2, '', { ...font, fontSize: '15px', color: '#ffffff' }).setOrigin(1, 0.5);
+    this.timerText = this.ui(this.add.text(0, 0, '', { ...font, color: '#ffffff' })).setOrigin(0.5);
+    this.roundText = this.ui(this.add.text(0, 0, '', { ...font, color: '#b9b3d6', align: 'center' })).setOrigin(0.5);
+    this.statsText = this.ui(this.add.text(0, 0, '', { ...font, color: '#ffffff', align: 'center' }));
     this.match.players.forEach(() => {
-      const t = this.add.text(0, 0, '', { ...font, fontSize: '15px', color: '#ffffff' }).setOrigin(0, 0.5);
-      this.winTexts.push(t);
+      this.winTexts.push(this.ui(this.add.text(0, 0, '', { ...font, color: '#ffffff' })).setOrigin(0, 0.5));
     });
+
+    // Cámara del mapa y cámara del marcador.
+    this.cameras.main.setBackgroundColor(this.theme.bg);
+    this.uiCam = this.cameras.add(0, 0, 1, 1, false, 'ui');
+    this.cameras.main.ignore(this.uiLayer);
+    this.uiCam.ignore(this.worldLayer);
+    const savedView = localStorage.getItem(VIEW_KEY);
+    this.closeView = savedView ? savedView === 'close' : isTouch();
+    this.applyLayout();
+    window.addEventListener('resize', this.onResize);
+    this.events.once('shutdown', () => window.removeEventListener('resize', this.onResize));
 
     const mapName = this.match.mapId;
     if (story) {
       const lv = levelAt(story.pos);
-      this.floatText(W / 2, HUD + 40, `${WORLDS[story.pos.world].name} ${levelLabel(story.pos)}`, '#ffffff', 22, 2400);
-      if (lv?.boss) this.floatText(W / 2, HUD + 72, '¡Jefe final!', '#ff6a6a', 18, 2400);
-    } else if (settings.map === 'random') this.floatText(W / 2, HUD + 40, `Mapa: ${MAPS.find((m) => m.id === mapName)?.name ?? mapName}`, '#ffffff', 20, 2200);
+      this.uiFloat(`${WORLDS[story.pos.world].name} ${levelLabel(story.pos)}`, '#ffffff', 22, 2400);
+      if (lv?.boss) this.uiFloat('¡Jefe final!', '#ff6a6a', 18, 2400, 30);
+    } else if (settings.map === 'random') this.uiFloat(`Mapa: ${MAPS.find((m) => m.id === mapName)?.name ?? mapName}`, '#ffffff', 20, 2200);
     this.bigText('3');
     sfx.countdown(false);
     // Música: la del jefe, la del mundo o la del mapa de batalla.
@@ -219,6 +259,7 @@ export class BattleScene extends Phaser.Scene {
     this.shake = Math.max(0, this.shake - dt);
     this.updateParticles(dt);
 
+    this.updateCamera(dt);
     this.drawDynamic();
     this.drawFx();
     this.drawFog();
@@ -332,7 +373,7 @@ export class BattleScene extends Phaser.Scene {
         this.floatText(px(e.x), py(e.y) - 16, '¡La puerta!', '#ffffff', 16, 1400);
         break;
       case 'doorOpen':
-        this.floatText(this.match.w * T / 2, HUD + 40, '¡Puerta abierta!', '#7dff9a', 22, 1800);
+        this.uiFloat('¡Puerta abierta!', '#7dff9a', 22, 1800);
         sfx.doorOpen();
         break;
       case 'clear':
@@ -404,20 +445,32 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private floatText(x: number, y: number, text: string, color: string, size = 16, ms = 900): void {
-    const t = this.add.text(x, y, text, {
+    const t = this.world(this.add.text(x, y, text, {
       fontFamily: 'system-ui, sans-serif', fontStyle: 'bold', fontSize: `${size}px`, color,
-      stroke: '#000000', strokeThickness: 4,
-    }).setOrigin(0.5).setDepth(20);
+      stroke: '#000000', strokeThickness: 4, resolution: 2,
+    })).setOrigin(0.5).setDepth(20);
     this.tweens.add({ targets: t, y: y - 30, alpha: 0, duration: ms, ease: 'Cubic.easeIn', onComplete: () => t.destroy() });
   }
 
+  /** Aviso en pantalla, encima del mapa (no se mueve con la cámara). */
+  private uiFloat(text: string, color: string, size: number, ms: number, dy = 0): void {
+    const a = this.area;
+    const y = a.y + (56 + dy) * this.u;
+    const t = this.ui(this.add.text(a.x + a.w / 2, y, text, {
+      fontFamily: 'system-ui, sans-serif', fontStyle: 'bold', fontSize: `${size * this.u}px`, color,
+      stroke: '#000000', strokeThickness: 4 * this.u,
+    })).setOrigin(0.5).setDepth(20);
+    this.tweens.add({ targets: t, y: y - 20 * this.u, alpha: 0, duration: ms, ease: 'Cubic.easeIn', onComplete: () => t.destroy() });
+  }
+
   private bigText(text: string, color = '#ffffff', size = 72): void {
-    const W = this.match.w * T;
-    const H = this.match.h * T + HUD;
-    const t = this.add.text(W / 2, H / 2, text, {
-      fontFamily: 'system-ui, sans-serif', fontStyle: 'bold', fontSize: `${size}px`, color,
-      stroke: '#1a1726', strokeThickness: 10,
-    }).setOrigin(0.5).setDepth(30).setScale(1.6).setAlpha(0);
+    const a = this.area;
+    // Que quepa en la zona del mapa aunque sea estrecha.
+    const px = Math.min(size * this.u, (a.w / Math.max(4, text.length)) * 1.6);
+    const t = this.ui(this.add.text(a.x + a.w / 2, a.y + a.h / 2, text, {
+      fontFamily: 'system-ui, sans-serif', fontStyle: 'bold', fontSize: `${px}px`, color,
+      stroke: '#1a1726', strokeThickness: px / 7,
+    })).setOrigin(0.5).setDepth(30).setScale(1.6).setAlpha(0);
     this.tweens.add({ targets: t, scale: 1, alpha: 1, duration: 180, ease: 'Back.easeOut' });
     this.tweens.add({ targets: t, alpha: 0, delay: 650, duration: 300, onComplete: () => t.destroy() });
   }
@@ -697,7 +750,7 @@ export class BattleScene extends Phaser.Scene {
       ctx.fillRect(0, 0, size, size);
       tex.refresh();
     }
-    this.fog = this.add.renderTexture(0, HUD, W, H - HUD).setOrigin(0, 0).setDepth(10);
+    this.fog = this.world(this.add.renderTexture(0, HUD, W, H - HUD)).setOrigin(0, 0).setDepth(10);
     this.light = this.make.image({ key: 'light', add: false });
   }
 
@@ -734,47 +787,149 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
+  private world<O extends Phaser.GameObjects.GameObject>(o: O): O {
+    this.worldLayer.add(o);
+    return o;
+  }
+
+  private ui<O extends Phaser.GameObjects.GameObject>(o: O): O {
+    this.uiLayer.add(o);
+    return o;
+  }
+
+  /**
+   * Coloca el mapa y el marcador según la pantalla. En ordenador: marcador arriba
+   * y el mapa entero. En móvil: marcador y mandos en los laterales y, si se quiere,
+   * vista cercana que sigue al monstruo.
+   */
+  applyLayout(): void {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const W = Math.max(1, Math.round(window.innerWidth * dpr));
+    const H = Math.max(1, Math.round(window.innerHeight * dpr));
+    if (this.scale.width !== W || this.scale.height !== H) this.scale.setGameSize(W, H);
+    const u = (this.u = dpr);
+    this.side = isTouch();
+    const mapW = this.match.w * T;
+    const mapH = this.match.h * T;
+    if (this.side) {
+      this.gutter = Math.min(SIDE_GUTTER * u, W * 0.26);
+      this.area = { x: this.gutter, y: 0, w: W - this.gutter * 2, h: H };
+    } else {
+      this.gutter = 0;
+      this.area = { x: 0, y: TOP_HUD * u, w: W, h: H - TOP_HUD * u };
+    }
+    const a = this.area;
+    const fit = Math.min(a.w / mapW, a.h / mapH);
+    const close = a.h / (CLOSE_ROWS * T);
+    this.following = this.side && this.closeView && close > fit * 1.05;
+    const cam = this.cameras.main;
+    cam.setViewport(a.x, a.y, a.w, a.h);
+    cam.setZoom(this.following ? close : fit);
+    if (this.following) {
+      cam.setBounds(0, HUD, mapW, mapH);
+      const p = this.match.players[0];
+      this.camX = p.x * T + T / 2;
+      this.camY = p.y * T + T / 2 + HUD;
+      cam.centerOn(this.camX, this.camY);
+    } else {
+      cam.removeBounds();
+      cam.centerOn(mapW / 2, HUD + mapH / 2);
+    }
+    this.uiCam.setViewport(0, 0, W, H);
+
+    this.timerText.setFontSize((this.side ? 28 : 24) * u);
+    this.roundText.setFontSize(11 * u).setWordWrapWidth(this.side ? this.gutter - 16 * u : 0);
+    this.statsText.setFontSize((this.side ? 17 : 15) * u).setLineSpacing(this.side ? 6 * u : 0);
+    for (const t of this.winTexts) t.setFontSize((this.side && this.data_.story ? 17 : 15) * u).setLineSpacing(6 * u);
+    this.drawHud();
+  }
+
+  /** Cambia entre la vista cercana y el mapa completo (móvil). */
+  toggleView(): void {
+    this.closeView = !this.closeView;
+    localStorage.setItem(VIEW_KEY, this.closeView ? 'close' : 'full');
+    this.applyLayout();
+  }
+
+  private updateCamera(dt: number): void {
+    if (!this.following) return;
+    const p = this.match.players[0];
+    const tx = p.x * T + T / 2;
+    const ty = p.y * T + T / 2 + HUD;
+    const k = Math.min(1, dt * 8);
+    this.camX += (tx - this.camX) * k;
+    this.camY += (ty - this.camY) * k;
+    this.cameras.main.centerOn(this.camX, this.camY);
+  }
+
   private drawHud(): void {
     const g = this.gHud;
     const game = this.match;
-    const W = game.w * T;
+    const u = this.u;
+    const W = this.scale.width;
+    const H = this.scale.height;
+    const story = this.data_.story;
+    const me = game.players[0];
     g.clear();
-    g.fillStyle(0x110f1b).fillRect(0, 0, W, HUD);
 
     const t = Math.ceil(game.timeLeft);
     const rain = game.timeLeft <= 0;
-    this.timerText.setText(rain ? '¡LLUVIA!' : `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`);
+    this.timerText.setText(rain ? (story ? '¡YA!' : '¡LLUVIA!') : `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`);
     this.timerText.setColor(rain ? '#ff6a6a' : t <= 15 ? '#ffd84a' : '#ffffff');
-    this.roundText.setText(`RONDA ${this.data_.round} · GANA CON ${this.data_.settings.roundsToWin}`);
+    this.roundText.setText(story
+      ? `MUNDO ${levelLabel(story.pos).toUpperCase()}`
+      : `RONDA ${this.data_.round} · GANA CON ${this.data_.settings.roundsToWin}`);
+    const extras = [me.kick ? '🦶' : '', me.throw ? '✋' : '', me.shield ? '🛡️' : '', me.curse ? '☠️' : ''].join('');
 
-    const story = this.data_.story;
-    if (story) {
-      this.roundText.setText(`MUNDO ${levelLabel(story.pos).toUpperCase()}`);
-      const me = game.players[0];
-      this.winTexts[0].setPosition(14, HUD / 2).setText(`❤ ${story.lives}   ★ ${story.score + game.score}   👾 ${game.aliveEnemies()}`).setAlpha(1);
-      const extras = [me.kick ? '🦶' : '', me.throw ? '✋' : '', me.shield ? '🛡️' : ''].join('');
-      this.statsText.setText(`💣${me.maxBombs}  🔥${me.range}  ⚡${me.speedLv}  ${extras}`);
+    if (this.side) {
+      // Laterales: izquierda reloj y jugadores; derecha mejoras (los mandos van encima, en HTML).
+      const gw = this.gutter;
+      g.fillStyle(0x110f1b).fillRect(0, 0, gw, H).fillRect(W - gw, 0, gw, H);
+      this.timerText.setPosition(gw / 2, 34 * u);
+      this.roundText.setPosition(gw / 2, 62 * u);
+      if (story) {
+        this.winTexts[0].setOrigin(0.5, 0).setPosition(gw / 2, 86 * u).setAlign('center')
+          .setText(`❤ ${story.lives}\n★ ${story.score + game.score}\n👾 ${game.aliveEnemies()}`).setAlpha(1);
+      } else {
+        const colW = (gw - 16 * u) / 2;
+        game.players.forEach((p, i) => {
+          const x = 8 * u + (i % 2) * colW + 12 * u;
+          const y = 92 * u + Math.floor(i / 2) * 28 * u;
+          this.chip(g, x, y, i, p.alive);
+          this.winTexts[i].setOrigin(0, 0.5).setPosition(x + 15 * u, y).setText(String(this.data_.wins[i])).setAlpha(p.alive ? 1 : 0.5);
+        });
+      }
+      this.statsText.setOrigin(0.5, 0).setPosition(W - gw / 2, 74 * u)
+        .setText(`💣 ${me.maxBombs}\n🔥 ${me.range}\n⚡ ${me.speedLv}${extras ? '\n' + extras : ''}`);
       return;
     }
 
-    // Fichas de jugadores a la izquierda del reloj.
-    const n = game.players.length;
-    const avail = W / 2 - 70;
-    const slot = Math.min(52, avail / n);
+    // Ordenador: barra superior.
+    const hud = TOP_HUD * u;
+    g.fillStyle(0x110f1b).fillRect(0, 0, W, hud);
+    this.timerText.setPosition(W / 2, 22 * u);
+    this.roundText.setPosition(W / 2, 45 * u);
+    this.statsText.setOrigin(1, 0.5).setPosition(W - 12 * u, hud / 2)
+      .setText(`💣${me.maxBombs}  🔥${me.range}  ⚡${me.speedLv}  ${extras}`);
+    if (story) {
+      this.winTexts[0].setOrigin(0, 0.5).setPosition(14 * u, hud / 2).setAlign('left')
+        .setText(`❤ ${story.lives}   ★ ${story.score + game.score}   👾 ${game.aliveEnemies()}`).setAlpha(1);
+      return;
+    }
+    const slot = Math.min(52 * u, (W / 2 - 70 * u) / game.players.length);
     game.players.forEach((p, i) => {
-      const x = 14 + i * slot;
-      const y = HUD / 2;
-      g.fillStyle(this.skins[i].color, p.alive ? 1 : 0.3).fillCircle(x + 9, y, 9);
-      if (!p.alive) g.lineStyle(2, 0xffffff, 0.7).lineBetween(x + 3, y - 6, x + 15, y + 6);
-      if (i === 0) g.lineStyle(2, 0xffffff).strokeCircle(x + 9, y, 11);
-      const txt = this.winTexts[i];
-      txt.setPosition(x + 21, y).setText(String(this.data_.wins[i])).setAlpha(p.alive ? 1 : 0.5);
+      const x = 14 * u + i * slot + 9 * u;
+      this.chip(g, x, hud / 2, i, p.alive);
+      this.winTexts[i].setOrigin(0, 0.5).setPosition(x + 12 * u, hud / 2).setText(String(this.data_.wins[i])).setAlpha(p.alive ? 1 : 0.5);
     });
+  }
 
-    // Lo que lleva el jugador humano, a la derecha.
-    const me = game.players[0];
-    const extras = [me.kick ? '🦶' : '', me.throw ? '✋' : '', me.shield ? '🛡️' : '', me.curse ? '☠️' : ''].join('');
-    this.statsText.setText(`💣${me.maxBombs}  🔥${me.range}  ⚡${me.speedLv}  ${extras}`);
+  /** Ficha de color de un jugador en el marcador. */
+  private chip(g: Phaser.GameObjects.Graphics, x: number, y: number, i: number, alive: boolean): void {
+    const u = this.u;
+    g.fillStyle(this.skins[i].color, alive ? 1 : 0.3).fillCircle(x, y, 9 * u);
+    if (!alive) g.lineStyle(2 * u, 0xffffff, 0.7).lineBetween(x - 6 * u, y - 6 * u, x + 6 * u, y + 6 * u);
+    if (i === 0) g.lineStyle(2 * u, 0xffffff).strokeCircle(x, y, 11 * u);
   }
 }
 

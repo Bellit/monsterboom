@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import './style.css';
-import { BattleScene, type MatchSettings, type StoryRun } from './scenes/BattleScene';
+import { BattleScene, isTouch, type MatchSettings, type StoryRun } from './scenes/BattleScene';
 import { BASE_STATS, type PlayerStats } from './core/game';
 import { levelAt, levelLabel, nextLevel, WORLDS } from './core/story';
 import { START_LIVES, clearRun, isUnlocked, loadRun, newRun, saveRun, unlockedIndex, worldName } from './storySave';
@@ -119,6 +119,7 @@ function scene(): BattleScene {
 }
 
 function enterGame(data: Parameters<BattleScene['init']>[0]): void {
+  if (isTouch()) enterFullscreen();
   show(menu, false);
   show(resultScreen, false);
   show(pauseScreen, false);
@@ -398,6 +399,56 @@ $('menu-form').addEventListener('submit', (e) => {
 $('resume').addEventListener('click', () => setPaused(false));
 $('quit').addEventListener('click', toMenu);
 $('touch-pause').addEventListener('click', () => setPaused(true));
+
+// ---------- Pantalla completa y vista ----------
+
+const fullBtn = $('touch-full');
+const viewBtn = $('touch-view');
+const canFullscreen = !!document.documentElement.requestFullscreen && document.fullscreenEnabled;
+// En iPhone Safari no existe: allí se consigue añadiendo el juego a la pantalla de inicio.
+show(fullBtn, canFullscreen);
+
+function enterFullscreen(): void {
+  if (!canFullscreen || document.fullscreenElement) return;
+  document.documentElement.requestFullscreen({ navigationUI: 'hide' })
+    .then(() => {
+      // En Android se puede fijar en horizontal; si el navegador no deja, no pasa nada.
+      const o = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+      return o.lock?.('landscape');
+    })
+    .catch(() => {});
+}
+
+function toggleFullscreen(): void {
+  if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+  else enterFullscreen();
+}
+
+function paintFullscreen(): void {
+  const on = !!document.fullscreenElement;
+  fullBtn.setAttribute('aria-label', on ? 'Salir de pantalla completa' : 'Pantalla completa');
+  fullBtn.setAttribute('aria-pressed', String(on));
+}
+document.addEventListener('fullscreenchange', paintFullscreen);
+fullBtn.addEventListener('click', () => {
+  toggleFullscreen();
+  fullBtn.blur();
+});
+controls.onFullscreen = toggleFullscreen;
+
+function paintView(): void {
+  const close = localStorage.getItem('boom-monsters:view') !== 'full';
+  // El botón ofrece lo contrario de lo que se ve ahora.
+  viewBtn.textContent = close ? '🗺️' : '🔍';
+  viewBtn.setAttribute('aria-label', close ? 'Ver el mapa completo' : 'Acercar la vista');
+}
+viewBtn.addEventListener('click', () => {
+  if (phaser.scene.isActive('battle')) scene().toggleView();
+  else localStorage.setItem('boom-monsters:view', localStorage.getItem('boom-monsters:view') === 'full' ? 'close' : 'full');
+  paintView();
+  viewBtn.blur();
+});
+paintView();
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && !pauseScreen.hidden) setPaused(false);
 });
