@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Boom Monsters · Batalla de monstruos con bombas</title>
-    <meta name="description" content="Boom Monsters: juego de batalla con bombas entre monstruos. Rompe bloques, recoge power-ups y sé el último en pie." />
+    <title>Boom Monsters · Monstruos, bombas y bloques</title>
+    <meta name="description" content="Boom Monsters: juego de monstruos y bombas con modo historia de 4 mundos y batallas de hasta 8 jugadores. Rompe bloques y recoge power-ups." />
     <meta name="robots" content="noindex" />
     <meta name="theme-color" content="#1a1726" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -14,12 +14,23 @@
 
     <main id="menu" class="screen">
       <h1>Boom<span>Monsters</span></h1>
-      <p class="tagline">Batalla de monstruos con bombas · prototipo</p>
+      <p class="tagline">Monstruos, bombas y bloques que vuelan</p>
       <form id="menu-form">
         <fieldset class="wide picker">
           <legend>Tu monstruo: <strong id="skin-name"></strong> <span id="skin-bio"></span></legend>
           <div id="skin-options" class="skin-options"></div>
         </fieldset>
+        <fieldset class="wide modes">
+          <legend class="sr-only">Modo de juego</legend>
+          <label class="mode"><input type="radio" name="mode" value="story" checked /> Historia</label>
+          <label class="mode"><input type="radio" name="mode" value="battle" /> Batalla</label>
+        </fieldset>
+        <div id="story-opts" class="opts">
+          <p id="story-progress" class="wide story-progress"></p>
+          <button id="story-continue" class="primary wide" type="button">Continuar</button>
+          <button id="story-new" class="wide" type="button">Nueva partida</button>
+        </div>
+        <div id="battle-opts" class="opts" hidden>
         <label>Jugadores
           <select name="players">
             <option>2</option><option>3</option><option selected>4</option>
@@ -53,6 +64,7 @@
           <span id="map-desc" class="map-desc"></span>
         </label>
         <button id="start" class="primary" type="submit">¡A jugar!</button>
+        </div>
       </form>
       <p class="help keys">Flechas o WASD para moverte · Espacio para poner bomba · Esc para pausar</p>
       <p class="help">Con el guante, pulsa bomba dos veces para lanzarla. La calavera trae una maldición… y se contagia.</p>

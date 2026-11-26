@@ -1,6 +1,9 @@
 import Phaser from 'phaser';
 import './style.css';
-import { BattleScene, type MatchSettings } from './scenes/BattleScene';
+import { BattleScene, type MatchSettings, type StoryRun } from './scenes/BattleScene';
+import { BASE_STATS, type PlayerStats } from './core/game';
+import { levelAt, levelLabel, nextLevel, WORLDS } from './core/story';
+import { START_LIVES, clearRun, loadRun, newRun, saveRun, worldName } from './storySave';
 import { Controls } from './input/controls';
 import { MONSTERS, cssColor, skinsFor } from './theme';
 import { canvasPainter, paintMonster } from './render/monster';
@@ -115,8 +118,7 @@ function scene(): BattleScene {
   return phaser.scene.getScene('battle') as BattleScene;
 }
 
-function startMatch(settings: MatchSettings): void {
-  current = settings;
+function enterGame(data: Parameters<BattleScene['init']>[0]): void {
   show(menu, false);
   show(resultScreen, false);
   show(pauseScreen, false);
@@ -124,15 +126,144 @@ function startMatch(settings: MatchSettings): void {
   document.body.classList.add('in-game');
   document.body.classList.remove('paused');
   controls.enabled = true;
-  const data = {
-    settings,
-    wins: new Array(settings.players).fill(0),
-    round: 1,
-    hooks: { controls, onRoundOver },
-  };
   if (phaser.scene.isActive('battle') || phaser.scene.isPaused('battle')) scene().scene.restart(data);
   else phaser.scene.start('battle', data);
 }
+
+const hooks = { controls, onRoundOver, onStoryOver };
+
+function startMatch(settings: MatchSettings): void {
+  current = settings;
+  enterGame({ settings, wins: new Array(settings.players).fill(0), round: 1, hooks });
+}
+
+// ---------- Modo historia ----------
+
+let run: StoryRun | null = null;
+let storyTimer: number | undefined;
+
+/** Ajustes de relleno: el modo historia no los usa, pero la escena los espera. */
+const STORY_SETTINGS: MatchSettings = { players: 1, difficulty: 'normal', roundsToWin: 1, roundTime: 0, map: 'classic', skin: 0 };
+
+function playLevel(r: StoryRun): void {
+  run = r;
+  saveRun(r);
+  enterGame({ settings: STORY_SETTINGS, wins: [0], round: 1, hooks, story: r });
+}
+
+function onStoryOver(result: 'clear' | 'dead', score: number, stats: PlayerStats): void {
+  if (!run) return;
+  const r = run;
+  resultActions.replaceChildren();
+  resultTitle.style.color = '';
+  clearTimeout(storyTimer);
+
+  if (result === 'clear') {
+    const next = nextLevel(r.pos);
+    const wasBoss = !!levelAt(r.pos)?.boss;
+    if (!next) {
+      clearRun();
+      run = null;
+      endScreen('¡Has terminado Boom Monsters!', `Puntuación final: ${score}`, [
+        button('Menú', toMenu, true),
+      ]);
+      return;
+    }
+    const nr: StoryRun = { ...r, pos: next, score, stats };
+    saveRun(nr);
+    resultTitle.style.color = '#7dff9a';
+    resultTitle.textContent = wasBoss ? `¡${worldName(r.pos.world)} completado!` : '¡Nivel superado!';
+    resultText.textContent = `★ ${score} · Siguiente: ${worldName(next.world)} ${levelLabel(next)}`;
+    show(resultScreen, true);
+    storyTimer = window.setTimeout(() => playLevel(nr), wasBoss ? 3200 : 2400);
+    return;
+  }
+
+  const lives = r.lives - 1;
+  if (lives > 0) {
+    // Se pierde una vida y las mejoras; se repite el nivel.
+    const nr: StoryRun = { ...r, lives, score, stats: { ...BASE_STATS } };
+    saveRun(nr);
+    resultTitle.style.color = '#ff9a9a';
+    resultTitle.textContent = '¡Te han pillado!';
+    resultText.textContent = lives === 1 ? 'Te queda 1 vida' : `Te quedan ${lives} vidas`;
+    show(resultScreen, true);
+    storyTimer = window.setTimeout(() => playLevel(nr), 2400);
+    return;
+  }
+
+  // Sin vidas: se vuelve al principio del mundo.
+  const nr = newRun(skin, r.pos.world);
+  saveRun(nr);
+  run = nr;
+  endScreen('Fin de la partida', `Vuelves al principio de ${worldName(r.pos.world)} con ${START_LIVES} vidas.`, [
+    button('Reintentar', () => playLevel({ ...nr, skin }), true),
+    button('Menú', toMenu),
+  ]);
+}
+
+function endScreen(title: string, text: string, actions: HTMLButtonElement[]): void {
+  controls.enabled = false;
+  show(touch, false);
+  music.play('menu');
+  resultTitle.textContent = title;
+  resultText.textContent = text;
+  resultActions.replaceChildren(...actions);
+  show(resultScreen, true);
+  actions[0]?.focus();
+}
+
+// Selector de modo y progreso guardado.
+const MODE_KEY = 'boom-monsters:mode';
+const storyOpts = $('story-opts');
+const battleOpts = $('battle-opts');
+const storyProgress = $('story-progress');
+const storyContinue = $<HTMLButtonElement>('story-continue');
+const storyNew = $<HTMLButtonElement>('story-new');
+
+function currentMode(): 'story' | 'battle' {
+  return (document.querySelector<HTMLInputElement>('input[name=mode]:checked')?.value as 'story' | 'battle') ?? 'story';
+}
+
+function refreshMenu(): void {
+  const mode = currentMode();
+  show(storyOpts, mode === 'story');
+  show(battleOpts, mode === 'battle');
+  const saved = loadRun();
+  if (saved) {
+    storyProgress.innerHTML = '';
+    const strong = document.createElement('strong');
+    strong.textContent = `${worldName(saved.pos.world)} ${levelLabel(saved.pos)}`;
+    storyProgress.append('Partida guardada: ', strong, ` · ❤ ${saved.lives} · ★ ${saved.score}`);
+    show(storyContinue, true);
+    storyNew.className = 'wide';
+    storyNew.textContent = 'Nueva partida';
+  } else {
+    storyProgress.textContent = `${WORLDS.length} mundos, ${WORLDS.reduce((s, w) => s + w.levels.length, 0)} niveles. Elimina a todos los bichos y encuentra la puerta.`;
+    show(storyContinue, false);
+    storyNew.className = 'primary wide';
+    storyNew.textContent = 'Empezar';
+  }
+}
+
+for (const input of document.querySelectorAll<HTMLInputElement>('input[name=mode]')) {
+  if (input.value === localStorage.getItem(MODE_KEY)) input.checked = true;
+  input.addEventListener('change', () => {
+    localStorage.setItem(MODE_KEY, currentMode());
+    refreshMenu();
+  });
+}
+refreshMenu();
+
+function continueStory(): void {
+  const saved = loadRun();
+  playLevel(saved ? { ...saved, skin } : newRun(skin));
+}
+storyContinue.addEventListener('click', continueStory);
+storyNew.addEventListener('click', () => {
+  if (loadRun() && !confirm('¿Empezar de cero? Se perderá la partida guardada.')) return;
+  playLevel(newRun(skin));
+});
 
 function onRoundOver(winner: number, wins: number[], settings: MatchSettings, next: () => void): void {
   const champion = wins.findIndex((w) => w >= settings.roundsToWin);
@@ -178,6 +309,9 @@ function button(label: string, onClick: () => void, primary = false): HTMLButton
 }
 
 function toMenu(): void {
+  clearTimeout(storyTimer);
+  run = null;
+  refreshMenu();
   controls.enabled = false;
   controls.reset();
   if (phaser.scene.isActive('battle') || phaser.scene.isPaused('battle')) phaser.scene.stop('battle');
@@ -187,7 +321,7 @@ function toMenu(): void {
   document.body.classList.remove('in-game', 'paused');
   show(menu, true);
   music.play('menu');
-  $('start').focus();
+  (currentMode() === 'story' ? (loadRun() ? storyContinue : storyNew) : $('start')).focus();
 }
 
 function setPaused(on: boolean): void {
@@ -204,6 +338,10 @@ controls.onPause = () => setPaused(!scene()?.paused);
 
 $('menu-form').addEventListener('submit', (e) => {
   e.preventDefault();
+  if (currentMode() === 'story') {
+    continueStory();
+    return;
+  }
   const form = new FormData(e.target as HTMLFormElement);
   startMatch({
     players: Number(form.get('players')),

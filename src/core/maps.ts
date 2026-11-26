@@ -58,7 +58,7 @@ export function parseLayout(rows: string[]): MapLayout {
 }
 
 /** Genera un mapa procedural del tipo pedido para n jugadores. */
-export function generateMap(id: Exclude<MapId, 'random'>, players: number, rand: () => number): MapLayout {
+export function generateMap(id: Exclude<MapId, 'random'>, players: number, rand: () => number, softDensity = 0.72): MapLayout {
   const { w, h } = players <= 4 ? { w: 15, h: 13 } : { w: 19, h: 15 };
   const tiles = new Uint8Array(w * h);
   const floor = new Uint8Array(w * h);
@@ -100,7 +100,7 @@ export function generateMap(id: Exclude<MapId, 'random'>, players: number, rand:
       if (border || pillar) {
         tiles[k] = SOLID;
         floor[k] = FLOOR.Normal;
-      } else if (floor[k] !== FLOOR.Teleport && rand() < 0.72) {
+      } else if (floor[k] !== FLOOR.Teleport && rand() < softDensity) {
         tiles[k] = SOFT;
       }
     }

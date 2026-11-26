@@ -1,5 +1,7 @@
 import { Rng } from './rng';
 import { generateMap, parseLayout, MAPS, type MapId, type MapLayout } from './maps';
+import { makeEnemy, updateEnemy, type Enemy } from './enemies';
+import { ENEMIES, type EnemyKind, type StoryLevel } from './story';
 import {
   CURSES, DIRS, DX, DY, FLOOR, NO_INPUT, OPPOSITE, POWER, TILE, conveyorDir,
   type Bomb, type Dir, type GameEvent, type Player, type PlayerInput, type PowerType,
@@ -49,7 +51,19 @@ export interface RoundConfig {
   startDelay?: number;
   /** Probabilidad de que un bloque suelte power-up (por defecto 0.38). */
   powerChance?: number;
+  /** Modo historia: nivel a jugar (un solo jugador contra enemigos). */
+  story?: StoryLevel;
+  /** Mejoras con las que empieza el jugador 0 (las arrastra entre niveles). */
+  startStats?: PlayerStats;
 }
+
+/** Mejoras que el jugador conserva de un nivel a otro en el modo historia. */
+export type PlayerStats = Pick<Player, 'maxBombs' | 'range' | 'speedLv' | 'kick' | 'throw' | 'shield'>;
+export const BASE_STATS: PlayerStats = { maxBombs: 1, range: 2, speedLv: 0, kick: false, throw: false, shield: false };
+
+const HUNTER_EVERY = 8;
+const MAX_HUNTERS = 3;
+const STORY_POWER_CHANCE = 0.06;
 
 export type Phase = 'starting' | 'playing' | 'ending' | 'over';
 
@@ -86,6 +100,20 @@ export class Game {
   private nextBombId = 1;
   private readonly powerChance: number;
 
+  // ---------- Modo historia ----------
+  readonly mode: 'battle' | 'story';
+  enemies: Enemy[] = [];
+  /** Casilla de la puerta de salida (-1 si no hay). Está escondida bajo un bloque. */
+  door = -1;
+  doorOpen = false;
+  score = 0;
+  /** Cómo acabó el nivel. */
+  result: 'clear' | 'dead' | null = null;
+  /** Power-ups escondidos bajo bloques concretos. */
+  private readonly hidden = new Map<number, PowerType>();
+  private hunterTimer = 0;
+  private huntersSpawned = 0;
+
   constructor(cfg: RoundConfig) {
     this.rng = new Rng(cfg.seed);
     let layout: MapLayout;
@@ -99,8 +127,11 @@ export class Game {
         id = options[this.rng.int(options.length)].id;
       }
       this.mapId = id as Exclude<MapId, 'random'>;
-      layout = generateMap(this.mapId, cfg.players, () => this.rng.next());
+      const players = cfg.story ? 1 : cfg.players;
+      layout = generateMap(this.mapId, players, () => this.rng.next(), cfg.story?.soft);
     }
+    this.mode = cfg.story ? 'story' : 'battle';
+    if (cfg.story) cfg = { ...cfg, players: 1, roundTime: cfg.story.time };
     this.w = layout.w;
     this.h = layout.h;
     this.tiles = layout.tiles;
@@ -112,17 +143,75 @@ export class Game {
     this.timeLeft = cfg.roundTime;
     this.startTimer = cfg.startDelay ?? START_DELAY;
     this.phase = this.startTimer > 0 ? 'starting' : 'playing';
-    this.powerChance = cfg.powerChance ?? POWER_CHANCE;
+    this.powerChance = cfg.powerChance ?? (cfg.story ? STORY_POWER_CHANCE : POWER_CHANCE);
     for (let k = 0; k < n; k++) if (this.floor[k] === FLOOR.Teleport) this.teleports.push(k);
 
     layout.spawns.slice(0, cfg.players).forEach(([x, y], id) => {
       this.players.push({
         id, x, y, alive: true, deadFor: 0,
-        maxBombs: 1, range: 2, speedLv: 0, kick: false, throw: false,
-        shield: false, invuln: 0, curse: null, curseTime: 0,
+        ...BASE_STATS,
+        ...(id === 0 ? cfg.startStats : undefined),
+        invuln: 0, curse: null, curseTime: 0,
         facing: 2, moving: false, iceDir: 0, tpLock: -1,
       });
     });
+
+    if (cfg.story) this.setupStory(cfg.story);
+  }
+
+  private setupStory(level: StoryLevel): void {
+    const [sx, sy] = this.tileOf(this.players[0]);
+    const far = (k: number, min: number) =>
+      Math.abs((k % this.w) - sx) + Math.abs(Math.floor(k / this.w) - sy) >= min;
+    const pick = (list: number[]) => list.splice(this.rng.int(list.length), 1)[0];
+
+    // Puerta y power-ups, escondidos bajo bloques rompibles.
+    const softs: number[] = [];
+    for (let k = 0; k < this.tiles.length; k++) if (this.tiles[k] === TILE.Soft) softs.push(k);
+    const doorCandidates = softs.filter((k) => far(k, 6));
+    if (doorCandidates.length || softs.length) {
+      this.door = doorCandidates.length ? pick(doorCandidates) : pick(softs);
+      const i = softs.indexOf(this.door);
+      if (i >= 0) softs.splice(i, 1);
+    }
+    for (const pw of level.powerups) {
+      if (softs.length) this.hidden.set(pick(softs), pw);
+    }
+
+    // Enemigos lejos del jugador.
+    const empties: number[] = [];
+    for (let k = 0; k < this.tiles.length; k++) {
+      if (this.tiles[k] === TILE.Empty && this.floor[k] !== FLOOR.Teleport && far(k, 5)) empties.push(k);
+    }
+    if (level.boss && empties.length) {
+      // El jefe empieza lo más lejos posible.
+      empties.sort((a, b) => this.distFrom(b, sx, sy) - this.distFrom(a, sx, sy));
+      const k = empties.shift()!;
+      const boss = makeEnemy('boss', k % this.w, Math.floor(k / this.w), level.boss);
+      this.enemies.push(boss);
+    }
+    for (const [kind, count] of Object.entries(level.enemies) as [EnemyKind, number][]) {
+      for (let i = 0; i < count && empties.length; i++) {
+        const k = pick(empties);
+        this.enemies.push(makeEnemy(kind, k % this.w, Math.floor(k / this.w)));
+      }
+    }
+  }
+
+  private distFrom(k: number, x: number, y: number): number {
+    return Math.abs((k % this.w) - x) + Math.abs(Math.floor(k / this.w) - y);
+  }
+
+  /** Mejoras actuales del jugador 0 (para pasarlas al siguiente nivel). */
+  statsOf(id = 0): PlayerStats {
+    const p = this.players[id];
+    return { maxBombs: p.maxBombs, range: p.range, speedLv: p.speedLv, kick: p.kick, throw: p.throw, shield: p.shield };
+  }
+
+  aliveEnemies(): number {
+    let c = 0;
+    for (const e of this.enemies) if (e.alive && e.kind !== 'hunter') c++;
+    return c;
   }
 
   // ---------- Consultas ----------
@@ -199,8 +288,11 @@ export class Game {
     if (this.phase === 'playing') {
       const before = this.timeLeft;
       this.timeLeft = Math.max(0, this.timeLeft - dt);
-      if (before > 0 && this.timeLeft === 0) this.events.push({ type: 'rainStart' });
-      if (this.timeLeft === 0) this.updateRain(dt);
+      if (before > 0 && this.timeLeft === 0) this.events.push({ type: this.mode === 'story' ? 'hunters' : 'rainStart' });
+      if (this.timeLeft === 0) {
+        if (this.mode === 'story') this.updateHunters(dt);
+        else this.updateRain(dt);
+      }
     }
 
     for (const p of this.players) {
@@ -211,11 +303,97 @@ export class Game {
       this.updatePlayer(p, inputs[p.id] ?? NO_INPUT, dt);
     }
 
+    if (this.mode === 'story') this.updateEnemies(dt);
     this.spreadCurses();
     this.updateBombs(dt);
     this.updateFlames(dt);
     this.checkPlayers();
+    if (this.mode === 'story') this.checkStory();
     this.checkEnd(dt);
+  }
+
+  // ---------- Modo historia ----------
+
+  private updateEnemies(dt: number): void {
+    const born: Enemy[] = [];
+    for (const e of this.enemies) {
+      const child = updateEnemy(this, e, dt);
+      if (child) born.push(child);
+    }
+    this.enemies.push(...born);
+    // Limpiar los que ya terminaron su animación de muerte.
+    this.enemies = this.enemies.filter((e) => e.alive || e.deadFor < 1);
+
+    const p = this.players[0];
+    if (!p?.alive || this.phase !== 'playing') return;
+    for (const e of this.enemies) {
+      if (!e.alive) continue;
+      const reach = e.boss ? 0.95 : 0.7;
+      if (Math.abs(e.x - p.x) < reach && Math.abs(e.y - p.y) < reach) this.hurt(p);
+    }
+  }
+
+  private updateHunters(dt: number): void {
+    this.hunterTimer -= dt;
+    if (this.hunterTimer > 0 || this.huntersSpawned >= MAX_HUNTERS) return;
+    this.hunterTimer = HUNTER_EVERY;
+    // Aparecen en la esquina más alejada del jugador.
+    const p = this.players[0];
+    const corners: [number, number][] = [[1, 1], [this.w - 2, 1], [1, this.h - 2], [this.w - 2, this.h - 2]];
+    corners.sort((a, b) => Math.hypot(b[0] - p.x, b[1] - p.y) - Math.hypot(a[0] - p.x, a[1] - p.y));
+    const [x, y] = corners[0];
+    this.enemies.push(makeEnemy('hunter', x, y));
+    this.huntersSpawned++;
+  }
+
+  /** Enemigos alcanzados por las llamas, puerta y salida. */
+  private checkStory(): void {
+    for (const e of this.enemies) {
+      if (!e.alive || e.invuln > 0) continue;
+      const k = this.idx(Math.round(e.x), Math.round(e.y));
+      if (this.flames[k] <= 0) continue;
+      e.hp--;
+      if (e.hp > 0) {
+        e.invuln = 1.5;
+        this.events.push({ type: 'bossHit', x: e.x, y: e.y, hp: e.hp });
+        continue;
+      }
+      e.alive = false;
+      const points = ENEMIES[e.kind].points;
+      this.score += points;
+      this.events.push({ type: 'enemyDeath', x: e.x, y: e.y, points, boss: e.boss !== null });
+    }
+
+    if (!this.doorOpen && this.door >= 0 && this.aliveEnemies() === 0) {
+      this.doorOpen = true;
+      this.events.push({ type: 'doorOpen' });
+    }
+
+    const p = this.players[0];
+    if (this.phase === 'playing' && p?.alive && this.doorOpen && this.tiles[this.door] === TILE.Empty) {
+      const [tx, ty] = this.tileOf(p);
+      if (this.idx(tx, ty) === this.door) {
+        this.result = 'clear';
+        this.score += Math.ceil(this.timeLeft) * 10;
+        this.phase = 'ending';
+        this.endTimer = 1.2;
+        this.events.push({ type: 'clear' });
+      }
+    }
+  }
+
+  /** Daño al jugador: el escudo lo para; si no, muere. */
+  private hurt(p: Player): void {
+    if (!p.alive || p.invuln > 0) return;
+    if (p.shield) {
+      p.shield = false;
+      p.invuln = SHIELD_INVULN;
+      this.events.push({ type: 'shieldBreak', player: p.id });
+      return;
+    }
+    p.alive = false;
+    p.moving = false;
+    this.events.push({ type: 'death', player: p.id });
   }
 
   private updatePlayer(p: Player, input: PlayerInput, dt: number): void {
@@ -558,14 +736,23 @@ export class Game {
       }
       this.burning.delete(k);
       this.tiles[k] = TILE.Empty;
-      if (this.rng.next() < this.powerChance) this.powerups[k] = this.randomPower();
+      const hidden = this.hidden.get(k);
+      if (hidden !== undefined) {
+        this.powerups[k] = hidden;
+        this.hidden.delete(k);
+      } else if (k === this.door) {
+        this.events.push({ type: 'doorFound', x: k % this.w, y: Math.floor(k / this.w) });
+      } else if (this.rng.next() < this.powerChance) {
+        this.powerups[k] = this.randomPower(this.mode === 'story');
+      }
     }
   }
 
-  private randomPower(): PowerType {
-    const total = POWER_WEIGHTS.reduce((s, [, w]) => s + w, 0);
+  private randomPower(noCurse = false): PowerType {
+    const weights = noCurse ? POWER_WEIGHTS.filter(([p]) => p !== POWER.Curse) : POWER_WEIGHTS;
+    const total = weights.reduce((s, [, w]) => s + w, 0);
     let r = this.rng.next() * total;
-    for (const [p, w] of POWER_WEIGHTS) {
+    for (const [p, w] of weights) {
       r -= w;
       if (r < 0) return p;
     }
@@ -583,16 +770,8 @@ export class Game {
       const [tx, ty] = this.tileOf(p);
       const k = this.idx(tx, ty);
       if (this.flames[k] > 0 && p.invuln <= 0) {
-        if (p.shield) {
-          p.shield = false;
-          p.invuln = SHIELD_INVULN;
-          this.events.push({ type: 'shieldBreak', player: p.id });
-        } else {
-          p.alive = false;
-          p.moving = false;
-          this.events.push({ type: 'death', player: p.id });
-          continue;
-        }
+        this.hurt(p);
+        if (!p.alive) continue;
       }
       const pw = this.powerups[k];
       if (pw >= 0) {
@@ -620,6 +799,20 @@ export class Game {
   }
 
   private checkEnd(dt: number): void {
+    if (this.mode === 'story') {
+      if (this.phase === 'playing' && !this.players[0].alive) {
+        this.result = 'dead';
+        this.phase = 'ending';
+        this.endTimer = END_DELAY;
+      } else if (this.phase === 'ending') {
+        this.endTimer -= dt;
+        if (this.endTimer <= 0) {
+          this.winner = this.result === 'clear' ? 0 : -1;
+          this.phase = 'over';
+        }
+      }
+      return;
+    }
     if (this.phase === 'playing' && this.aliveCount() <= 1) {
       this.phase = 'ending';
       this.endTimer = END_DELAY;

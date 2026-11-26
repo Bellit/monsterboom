@@ -73,6 +73,15 @@ Juego web de acción en cuadrícula con bombas, protagonizado por monstruos. Per
    - ✅ Elegir monstruo en el menú (se recuerda entre visitas)
    - ✅ Música chiptune propia generada por código: tema de menú y de batalla (se acelera con la lluvia); botones separados de música y efectos
    - Pendiente: IA que use portales y escudo con cabeza
-3. Modo historia.
+3. **Modo historia** ← *primera versión jugable*
+   - ✅ 4 mundos × 5 niveles definidos como datos en `src/core/story.ts` (Cripta, Lago helado, Fábrica, Portales)
+   - ✅ Enemigos: Babosa (lenta, al azar), Murciélago (rápido, errático), Mirón (te persigue si te ve en línea), Fantasmón (atraviesa bloques y te busca)
+   - ✅ Jefe al final de cada mundo con vida, corona, invocaciones y más rabia cuanto más herido
+   - ✅ Puerta escondida bajo un bloque; se abre al eliminar a todos los enemigos
+   - ✅ 3 vidas; al morir se pierden las mejoras; sin vidas se vuelve al principio del mundo
+   - ✅ Puntos por enemigo y bonus por el tiempo que sobra
+   - ✅ Al acabarse el tiempo llegan cazadores que atraviesan bloques
+   - ✅ Guardado automático en el navegador al empezar cada nivel
+   - Pendiente: equilibrar la dificultad jugando, pantalla de final, más tipos de jefe
 4. Arte, sonido y pulido.
 5. Online con Colyseus.

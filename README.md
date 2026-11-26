@@ -1,6 +1,6 @@
 # Boom Monsters
 
-Juego web de batalla con bombas entre monstruos. Diseño completo en [DISENO.md](DISENO.md).
+Juego web de bombas entre monstruos, con modo historia (4 mundos) y modo batalla (2-8 jugadores contra bots). Diseño completo en [DISENO.md](DISENO.md).
 
 ## Arrancar
 
@@ -16,6 +16,8 @@ Abre http://localhost:5173. `npm test` pasa los tests de la lógica y `npm run b
 - `src/core/` — lógica del juego (mapa, movimiento, bombas, IA). TypeScript puro, sin Phaser: se reutilizará en el servidor online.
 - `src/scenes/` — dibujado con Phaser (de momento formas simples).
 - `src/core/maps.ts` — mapas temáticos (también se pueden escribir como texto).
+- `src/core/story.ts` — mundos, niveles y enemigos del modo historia (para añadir niveles basta con añadir datos).
+- `src/core/enemies.ts` — comportamiento de los enemigos.
 - `src/input/` — teclado y controles táctiles.
 - `src/audio/` — motor de audio, efectos y música sintetizados (temas propios en `music.ts`).
 - `src/render/monster.ts` — dibujo de los monstruos, compartido por el juego y el menú.

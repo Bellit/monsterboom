@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
-import { Game, STEP } from '../core/game';
+import { Game, STEP, type PlayerStats } from '../core/game';
+import { WORLDS, levelAt, levelLabel, type StoryPos } from '../core/story';
+import { paintEnemy } from '../render/enemies';
 import { BotBrain } from '../core/ai';
 import { MAPS, type MapId } from '../core/maps';
 import { FLOOR, POWER, TILE, conveyorDir, type CurseType, type Difficulty, type GameEvent, type PlayerInput } from '../core/types';
@@ -22,6 +24,16 @@ export interface MatchSettings {
 export interface MatchHooks {
   controls: Controls;
   onRoundOver: (winner: number, wins: number[], settings: MatchSettings, next: () => void) => void;
+  onStoryOver?: (result: 'clear' | 'dead', score: number, stats: PlayerStats) => void;
+}
+
+/** Partida del modo historia en curso. */
+export interface StoryRun {
+  pos: StoryPos;
+  lives: number;
+  score: number;
+  stats: PlayerStats;
+  skin: number;
 }
 
 interface SceneData {
@@ -29,6 +41,8 @@ interface SceneData {
   wins: number[];
   round: number;
   hooks: MatchHooks;
+  /** Si está, se juega un nivel del modo historia. */
+  story?: StoryRun;
 }
 
 interface Particle {
@@ -120,14 +134,18 @@ export class BattleScene extends Phaser.Scene {
   }
 
   create(): void {
-    const { settings } = this.data_;
-    this.match = new Game({
-      players: settings.players,
-      seed: (Date.now() ^ (this.data_.round * 7919)) >>> 0,
-      roundTime: settings.roundTime,
-      map: settings.map,
-    });
-    this.skins = skinsFor(settings.skin, this.match.players.length).map((i) => MONSTERS[i]);
+    const { settings, story } = this.data_;
+    const seed = (Date.now() ^ (this.data_.round * 7919)) >>> 0;
+    const level = story ? levelAt(story.pos) : null;
+    this.match = story && level
+      ? new Game({
+        players: 1, seed, roundTime: level.time, map: WORLDS[story.pos.world].theme,
+        story: level, startStats: story.stats,
+      })
+      : new Game({ players: settings.players, seed, roundTime: settings.roundTime, map: settings.map });
+    this.skins = story
+      ? [MONSTERS[story.skin]]
+      : skinsFor(settings.skin, this.match.players.length).map((i) => MONSTERS[i]);
     this.bots = this.match.players.slice(1).map((p) => new BotBrain(p.id, settings.difficulty));
     this.data_.hooks.controls.reset();
 
@@ -153,11 +171,15 @@ export class BattleScene extends Phaser.Scene {
     });
 
     const mapName = this.match.mapId;
-    if (settings.map === 'random') this.floatText(W / 2, HUD + 40, `Mapa: ${MAPS.find((m) => m.id === mapName)?.name ?? mapName}`, '#ffffff', 20, 2200);
+    if (story) {
+      const lv = levelAt(story.pos);
+      this.floatText(W / 2, HUD + 40, `${WORLDS[story.pos.world].name} ${levelLabel(story.pos)}`, '#ffffff', 22, 2400);
+      if (lv?.boss) this.floatText(W / 2, HUD + 72, '¡Jefe final!', '#ff6a6a', 18, 2400);
+    } else if (settings.map === 'random') this.floatText(W / 2, HUD + 40, `Mapa: ${MAPS.find((m) => m.id === mapName)?.name ?? mapName}`, '#ffffff', 20, 2200);
     this.bigText('3');
     sfx.countdown(false);
     music.play('battle');
-    music.setTempo(1);
+    music.setTempo(story && levelAt(story.pos)?.boss ? 1.12 : 1);
   }
 
   update(_t: number, deltaMs: number): void {
@@ -181,7 +203,12 @@ export class BattleScene extends Phaser.Scene {
     this.drawFx();
     this.drawHud();
 
-    if (this.match.phase === 'over' && !this.roundHandled) {
+    if (this.match.phase === 'over' && !this.roundHandled && this.data_.story) {
+      this.roundHandled = true;
+      const result = this.match.result ?? 'dead';
+      if (result === 'clear') sfx.win();
+      this.data_.hooks.onStoryOver?.(result, this.data_.story.score + this.match.score, this.match.statsOf());
+    } else if (this.match.phase === 'over' && !this.roundHandled) {
       this.roundHandled = true;
       const { settings, wins, round, hooks } = this.data_;
       const w = wins.slice();
@@ -256,6 +283,32 @@ export class BattleScene extends Phaser.Scene {
       case 'land':
         this.burst(px(e.x), py(e.y), [0xcccccc, 0x888888], 6, 80, 0.3);
         sfx.land();
+        break;
+      case 'enemyDeath':
+        this.burst(px(e.x), py(e.y), e.boss ? [0xffd84a, 0xffffff, C.flameOut] : [0xffffff, 0xcfe9ff], e.boss ? 40 : 14, e.boss ? 320 : 180, 0.7);
+        this.floatText(px(e.x), py(e.y) - 16, String(e.points), '#ffe066', e.boss ? 26 : 16);
+        if (e.boss) { this.shake = 0.5; this.bigText('¡JEFE DERROTADO!', '#ffd84a', 44); }
+        sfx.enemyDeath();
+        break;
+      case 'bossHit':
+        this.burst(px(e.x), py(e.y), [0xffffff, 0xff6a6a], 14, 200, 0.5);
+        this.floatText(px(e.x), py(e.y) - 30, `¡Ay! (${e.hp})`, '#ff9a9a', 18);
+        sfx.bossHit();
+        break;
+      case 'doorFound':
+        this.floatText(px(e.x), py(e.y) - 16, '¡La puerta!', '#ffffff', 16, 1400);
+        break;
+      case 'doorOpen':
+        this.floatText(this.match.w * T / 2, HUD + 40, '¡Puerta abierta!', '#7dff9a', 22, 1800);
+        sfx.doorOpen();
+        break;
+      case 'clear':
+        this.bigText('¡NIVEL SUPERADO!', '#7dff9a', 44);
+        break;
+      case 'hunters':
+        this.bigText('¡VIENEN LOS CAZADORES!', '#ff6a6a', 36);
+        sfx.alarm();
+        music.setTempo(1.3);
         break;
       case 'rainStart':
         this.bigText('¡LLUVIA DE BOMBAS!', '#ff6a6a', 40);
@@ -374,6 +427,7 @@ export class BattleScene extends Phaser.Scene {
           const pulse = 0.5 + 0.5 * Math.sin(this.time_ * 4 + k);
           g.fillStyle(C.portalGlow, 0.25 + pulse * 0.35).fillEllipse(px + T / 2, py + T / 2, T * 0.55 * (0.8 + pulse * 0.2), T * 0.42);
         }
+        if (k === game.door && t === TILE.Empty) this.drawDoor(g, px, py, game.doorOpen);
         if (t === TILE.Soft) {
           g.fillStyle(C.softLine).fillRect(px + 1, py + 1, T - 2, T - 2);
           g.fillStyle(C.soft).fillRect(px + 3, py + 3, T - 6, T - 8);
@@ -436,8 +490,36 @@ export class BattleScene extends Phaser.Scene {
       }
     }
 
+    for (const e of game.enemies) {
+      paintEnemy(this.painter, e, e.x * T + T / 2, e.y * T + T / 2 + HUD, T * 0.36, this.time_);
+      if (e.boss && e.alive) {
+        // barra de vida
+        const w = T * 1.4;
+        const bx = e.x * T + T / 2 - w / 2;
+        const by = e.y * T + HUD - T * 0.75;
+        g.fillStyle(0x000000, 0.6).fillRect(bx - 2, by - 2, w + 4, 10);
+        g.fillStyle(0xff4d6d).fillRect(bx, by, w * (e.hp / e.maxHp), 6);
+      }
+    }
     const order = game.players.slice().sort((a, b) => a.y - b.y);
     for (const p of order) this.drawMonster(g, p.id);
+  }
+
+  private drawDoor(g: Phaser.GameObjects.Graphics, px: number, py: number, open: boolean): void {
+    const x = px + 8;
+    const y = py + 6;
+    const w = T - 16;
+    const h = T - 10;
+    g.fillStyle(0x2a1d14).fillRoundedRect(x - 3, y - 3, w + 6, h + 6, { tl: 14, tr: 14, bl: 2, br: 2 });
+    if (open) {
+      const glow = 0.6 + 0.4 * Math.sin(this.time_ * 5);
+      g.fillStyle(0xfff2a8, glow).fillRoundedRect(x, y, w, h, { tl: 12, tr: 12, bl: 0, br: 0 });
+      g.fillStyle(0xffffff, 0.5 * glow).fillRect(x + w / 2 - 3, y + 6, 6, h - 6);
+    } else {
+      g.fillStyle(0x7a4a2a).fillRoundedRect(x, y, w, h, { tl: 12, tr: 12, bl: 0, br: 0 });
+      g.fillStyle(0x5a3520).fillRect(x + w / 2 - 1, y + 4, 2, h - 4);
+      g.fillStyle(0xffd84a).fillCircle(x + w - 7, y + h / 2 + 2, 2.5);
+    }
   }
 
   private drawBeltArrows(g: Phaser.GameObjects.Graphics, px: number, py: number, dir: number): void {
@@ -561,6 +643,16 @@ export class BattleScene extends Phaser.Scene {
     this.timerText.setText(rain ? '¡LLUVIA!' : `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`);
     this.timerText.setColor(rain ? '#ff6a6a' : t <= 15 ? '#ffd84a' : '#ffffff');
     this.roundText.setText(`RONDA ${this.data_.round} · GANA CON ${this.data_.settings.roundsToWin}`);
+
+    const story = this.data_.story;
+    if (story) {
+      this.roundText.setText(`MUNDO ${levelLabel(story.pos).toUpperCase()}`);
+      const me = game.players[0];
+      this.winTexts[0].setPosition(14, HUD / 2).setText(`❤ ${story.lives}   ★ ${story.score + game.score}   👾 ${game.aliveEnemies()}`).setAlpha(1);
+      const extras = [me.kick ? '🦶' : '', me.throw ? '✋' : '', me.shield ? '🛡️' : ''].join('');
+      this.statsText.setText(`💣${me.maxBombs}  🔥${me.range}  ⚡${me.speedLv}  ${extras}`);
+      return;
+    }
 
     // Fichas de jugadores a la izquierda del reloj.
     const n = game.players.length;

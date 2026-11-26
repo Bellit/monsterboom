@@ -121,4 +121,11 @@ export type GameEvent =
   | { type: 'teleport'; player: number; fromX: number; fromY: number; x: number; y: number }
   | { type: 'countdown'; value: number }
   | { type: 'go' }
-  | { type: 'rainStart' };
+  | { type: 'rainStart' }
+  // Modo historia
+  | { type: 'enemyDeath'; x: number; y: number; points: number; boss: boolean }
+  | { type: 'bossHit'; x: number; y: number; hp: number }
+  | { type: 'doorFound'; x: number; y: number }
+  | { type: 'doorOpen' }
+  | { type: 'clear' }
+  | { type: 'hunters' };

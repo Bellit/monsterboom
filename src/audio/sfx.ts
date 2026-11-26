@@ -83,6 +83,21 @@ class Sfx {
     [523, 659, 784, 1047, 784, 1047].forEach((f, i) => this.tone(f, f, 0.14, 'square', 0.13, i * 0.11));
   }
 
+  enemyDeath(): void {
+    if (!this.throttle('enemyDeath', 50)) return;
+    this.tone(900, 200, 0.18, 'square', 0.14);
+    this.tone(1200, 400, 0.12, 'triangle', 0.1, 0.05);
+  }
+
+  bossHit(): void {
+    this.tone(180, 60, 0.3, 'sawtooth', 0.25);
+    this.noise(0.2, 3000, 500, 0.3);
+  }
+
+  doorOpen(): void {
+    [392, 523, 659, 784].forEach((f, i) => this.tone(f, f, 0.12, 'triangle', 0.2, i * 0.08));
+  }
+
   select(): void {
     this.tone(660, 990, 0.08, 'square', 0.1);
   }
